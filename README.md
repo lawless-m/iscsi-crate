@@ -1,173 +1,185 @@
-# Claude Skills
+# iscsi-target
 
-![Spellbook](spellbook.png)
+A pure Rust iSCSI target library providing a clean, trait-based API for building iSCSI storage servers.
 
-This folder contains domain-specific skills that teach Claude about proven patterns and implementations used across our projects.
+## Status
 
-## Available Skills
+**Early Development** - This crate provides the API structure and trait definitions for an iSCSI target implementation. The actual iSCSI protocol implementation (PDU parsing, session management, etc.) is planned for future development.
 
-### 🗄️ Databases
-**Description**: RDBMS access patterns for DuckDB, MySQL, PostgreSQL, SQL Server, and DBISAM using ODBC and native drivers
+## Overview
 
-**Key Topics**:
-- ServiceLib ODBC wrapper with ExecuteAndMap pattern
-- Direct PostgreSQL access with Npgsql (recommended over ODBC)
-- Native MySQL access patterns
-- DuckDB for querying Parquet files
-- PgQuery command-line tool for ad-hoc queries
-- Parameter styles by database type
+This library makes it easy to create iSCSI targets by providing a simple trait (`ScsiBlockDevice`) that you implement for your storage backend. The library handles the iSCSI protocol details, allowing you to focus on storage logic.
 
-**Reference Files**:
-- `ODBC.cs` - ServiceLib ODBC wrapper
-- `PgQuery.cs` - PostgreSQL command-line tool
+## Features
 
----
+- **Clean trait-based API** - Implement one trait to provide storage
+- **Flexible storage backends** - File, memory, network, CAS, or custom
+- **Standard compliance** - Based on RFC 3720 (iSCSI protocol)
+- **Builder pattern** - Easy configuration with sensible defaults
+- **Thread-safe** - Designed for concurrent access
 
-### 🔍 Elasticsearch
-**Description**: Elasticsearch 5.2 operations using HTTP API - searching, indexing, bulk operations, scroll API, and alias management
+## Quick Start
 
-**Key Topics**:
-- HTTP Client approach (no official client library)
-- ServiceLib.Elasticsearch wrapper for common operations
-- Scroll API for downloading large indices
-- Bulk indexing with NDJSON format
-- Zero-downtime updates with timestamped indices + aliases
-- Dynamic result parsing
+Add to your `Cargo.toml`:
 
-**Reference Files**:
-- `Elasticsearch.cs` - ServiceLib HTTP wrapper
-- `ElasticsearchService.cs` - JordanPrice service with alias pattern
-
-**Version**: Elasticsearch 5.2 (fixed, will not change)
-
----
-
-### 📊 Parquet Files
-**Description**: Creating and managing Parquet files in C# with multi-threaded operations and incremental updates
-
-**Key Topics**:
-- Parquet.Net library (v4.23.5 - 4.25.0)
-- Dynamic schema creation from DataTable
-- Multi-threaded batch processing patterns
-- Thread-safe updates with ParquetUpdateQueue
-- Memory management for large datasets
-- Incremental sync with timestamp tracking
-
-**Reference Files**:
-- `BPQuery_Parquet.cs` - Single-threaded MySQL to Parquet
-- `ParquetUpdateQueue.cs` - Thread-safe queue pattern
-- `ElastiCompare_ParquetService.cs` - Multi-threaded Elasticsearch to Parquet
-
-**Projects**: BPQuery (MySQL sync), ElastiCompare (Elasticsearch downloads)
-
----
-
-### 📝 Logging
-**Description**: UTF-8 logging extensions and patterns
-
-**Reference Files**:
-- `Utf8LoggingExtensions.cs` - UTF-8 logger implementation
-
----
-
-## How to Use Skills
-
-### Invoke a Skill
-Skills are loaded automatically by Claude when relevant to the task, or you can explicitly request them:
-
-**Natural invocation (recommended)**:
-- "Help me with Elasticsearch queries" → Claude loads Elasticsearch skill
-- "I need to create a Parquet file" → Claude loads Parquet Files skill
-- "Set up database connections" → Claude loads Databases skill
-
-**Explicit request**:
-- "Use the Databases skill to help me"
-- "Load the Parquet Files skill"
-
-Skills are invoked using the Skill tool internally by Claude when needed.
-
-### Skill Structure
-Each skill follows this pattern:
-
-```markdown
----
-name: Skill Name
-description: Brief description
----
-
-# Skill Name
-
-## Instructions
-Guidelines for Claude to follow (numbered list)
-
-## Examples
-Example scenarios showing usage patterns
-
----
-
-# Reference Implementation Details
-Detailed code examples and patterns
+```toml
+[dependencies]
+iscsi-target = "0.1"
 ```
 
-### Benefits of Skills
-1. **Consistent Patterns**: Ensures Claude uses proven approaches
-2. **Self-Contained**: All reference code is in the skills folder
-3. **Version Controlled**: Skills folder is the source of truth
-4. **Project-Specific**: Based on actual production implementations
-5. **Comprehensive**: Combines guidelines, examples, and working code
+### Basic Example
 
-## Skill Development Tips
+```rust
+use iscsi_target::{IscsiTarget, ScsiBlockDevice, ScsiResult};
 
-### When to Create a Skill
-- You have proven patterns used across multiple projects
-- You want Claude to follow specific conventions
-- You have reusable library code (like ServiceLib)
-- You need to document version-specific APIs (like Elasticsearch 5.2)
+// Implement the trait for your storage
+struct MyStorage {
+    data: Vec<u8>,
+}
 
-### Skill File Organization
+impl ScsiBlockDevice for MyStorage {
+    fn read(&self, lba: u64, blocks: u32, block_size: u32) -> ScsiResult<Vec<u8>> {
+        let offset = (lba * block_size as u64) as usize;
+        let len = (blocks * block_size) as usize;
+        Ok(self.data[offset..offset + len].to_vec())
+    }
+
+    fn write(&mut self, lba: u64, data: &[u8], block_size: u32) -> ScsiResult<()> {
+        let offset = (lba * block_size as u64) as usize;
+        self.data[offset..offset + data.len()].copy_from_slice(data);
+        Ok(())
+    }
+
+    fn capacity(&self) -> u64 {
+        (self.data.len() / 512) as u64
+    }
+
+    fn block_size(&self) -> u32 {
+        512
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let storage = MyStorage {
+        data: vec![0u8; 100 * 1024 * 1024],  // 100 MB
+    };
+
+    let target = IscsiTarget::builder()
+        .bind_addr("0.0.0.0:3260")
+        .target_name("iqn.2025-12.local:storage.disk1")
+        .build(storage)?;
+
+    target.run()?;
+    Ok(())
+}
 ```
-skills/
-├── SkillName/
-│   ├── SKILL.md              # Main skill documentation
-│   ├── Implementation1.cs     # Reference code
-│   └── Implementation2.cs     # More reference code
-└── README.md                  # This file
+
+## API Documentation
+
+### `ScsiBlockDevice` Trait
+
+The core trait you implement to provide storage:
+
+```rust
+pub trait ScsiBlockDevice: Send + Sync {
+    /// Read blocks from the device
+    fn read(&self, lba: u64, blocks: u32, block_size: u32) -> ScsiResult<Vec<u8>>;
+
+    /// Write blocks to the device
+    fn write(&mut self, lba: u64, data: &[u8], block_size: u32) -> ScsiResult<()>;
+
+    /// Get total capacity in logical blocks
+    fn capacity(&self) -> u64;
+
+    /// Get block size in bytes (typically 512 or 4096)
+    fn block_size(&self) -> u32;
+
+    /// Flush pending writes (optional)
+    fn flush(&mut self) -> ScsiResult<()> { Ok(()) }
+}
 ```
 
-### Best Practices
-1. **Keep Instructions Concise**: 5-10 numbered guidelines
-2. **Provide Clear Examples**: Show user request → Claude response pattern
-3. **Include Working Code**: Copy actual implementations from projects
-4. **Document Constraints**: Note version locks, deprecated patterns
-5. **Reference Local Files**: Point to implementation files in the skill folder
+### `IscsiTarget` Builder
 
-## Project References
+Configure your target with the builder pattern:
 
-Skills are based on proven implementations from these projects:
+```rust
+IscsiTarget::builder()
+    .bind_addr("0.0.0.0:3260")               // Listen address (default: 0.0.0.0:3260)
+    .target_name("iqn.2025-12.local:...")    // IQN target name (required format)
+    .build(storage_backend)?                 // Build with your storage
+    .run()?;                                 // Start serving
+```
 
-- **BPQuery**: MySQL to Parquet incremental sync
-- **ElastiCompare**: Elasticsearch comparison and downloads
-- **JordanPrice**: Elasticsearch service with zero-downtime updates
-- **CRMPollerFixer**: ODBC database operations
-- **PgQuery**: PostgreSQL command-line tool
+## Use Cases
 
-## Updating Skills
+- **Network-attached storage** - Serve block devices over the network
+- **Storage testing** - Create test targets for iSCSI initiator testing
+- **Cloud storage** - Expose S3/Azure/GCS as block devices
+- **Content-addressed storage** - Integrate with deduplication systems
+- **Virtual machine storage** - Provide storage for hypervisors
 
-When updating a skill:
-1. Update the SKILL.md with new patterns
-2. Copy updated implementation files to the skill folder
-3. Test by invoking the skill and verifying Claude's responses
-4. Document version changes and deprecations
+## Architecture
 
----
+```
+┌─────────────────────┐
+│  iSCSI Initiator    │  (Windows, Linux, ESXi, etc.)
+│   (Client)          │
+└──────────┬──────────┘
+           │ iSCSI Protocol (TCP port 3260)
+           │
+┌──────────▼──────────┐
+│   IscsiTarget       │  (This crate)
+│  ┌──────────────┐   │
+│  │  Protocol    │   │  ← PDU parsing, session mgmt
+│  │  Layer       │   │
+│  └──────┬───────┘   │
+│         │           │
+│  ┌──────▼───────┐   │
+│  │ ScsiBlock    │   │  ← Your implementation
+│  │ Device       │   │
+│  │ (trait)      │   │
+│  └──────┬───────┘   │
+└─────────┼───────────┘
+          │
+┌─────────▼───────────┐
+│  Storage Backend    │  (Memory, File, Network, etc.)
+└─────────────────────┘
+```
 
-*Generated with Claude Code for Matthew Heath's development environment*
+## Roadmap
 
-Also synced to https://github.com/lawless-m/claude-skills
+- [x] Trait definition and API structure
+- [x] Builder pattern and configuration
+- [x] Example implementations
+- [ ] iSCSI PDU parsing and serialization (RFC 3720)
+- [ ] Session and connection management
+- [ ] SCSI command handling (Read10, Write10, etc.)
+- [ ] Multi-initiator support
+- [ ] CHAP authentication
+- [ ] Error recovery
+- [ ] Performance optimization
 
+## Contributing
 
+This is an open-source project. Contributions are welcome, especially for:
 
+- iSCSI protocol implementation (PDU handling, RFC 3720 compliance)
+- SCSI command support
+- Testing and documentation
+- Example storage backends
 
+## References
 
+- [RFC 3720: iSCSI Protocol](https://datatracker.ietf.org/doc/html/rfc3720)
+- [RFC 3721: iSCSI Naming and Discovery](https://datatracker.ietf.org/doc/html/rfc3721)
+- [SCSI Architecture Model](https://www.t10.org/drafts.htm#SCSI3_SAM)
 
+## License
 
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

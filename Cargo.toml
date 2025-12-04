@@ -1,0 +1,27 @@
+[package]
+name = "iscsi-target"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matt Lawless"]
+license = "MIT OR Apache-2.0"
+description = "A pure Rust iSCSI target implementation"
+repository = "https://github.com/lawless-m/iscsi-crate"
+keywords = ["iscsi", "storage", "scsi", "target", "network"]
+categories = ["network-programming", "filesystem"]
+readme = "README.md"
+
+[dependencies]
+byteorder = "1.5"
+thiserror = "1.0"
+log = "0.4"
+
+[dev-dependencies]
+env_logger = "0.11"
+
+[lib]
+name = "iscsi_target"
+path = "src/lib.rs"
+
+[[example]]
+name = "simple_target"
+path = "examples/simple_target.rs"
