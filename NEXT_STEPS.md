@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Foundation complete, ready for protocol implementation
+**Status:** Phase 1 (PDU Support) complete, ready for Session Management
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml
@@ -14,79 +14,73 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 - ✓ Example implementation
 - ✓ Documentation
 - ✓ Pushed to GitHub: https://github.com/lawless-m/iscsi-crate
+- ✓ **PDU parsing and serialization (Phase 1 complete)**
+- ✓ All PDU types implemented (Login, Text, SCSI, Data-In/Out, NOP, Logout)
+- ✓ 14 unit tests passing
 
 **What's Next:**
-Implement the iSCSI protocol to make it actually work.
+Implement Session Management (Phase 2) to handle login and connection state.
 
 ## Where to Start
 
-### Quick Start: Phase 1 - PDU Parsing
+### Quick Start: Phase 2 - Session Management
 
-Start with `src/pdu.rs` - this is the foundation for everything else.
+Start with `src/session.rs` - this handles connection and session state.
 
-**Goal:** Parse and serialize iSCSI Protocol Data Units (PDUs)
+**Goal:** Handle iSCSI login, negotiation, and session lifecycle
 
-**File:** `/home/matt/Git/iscsi-crate/src/pdu.rs`
+**File:** `src/session.rs`
 
 **Steps:**
 
-1. Define the PDU structure:
+1. Define the Session structure:
 ```rust
-pub struct IscsiPdu {
-    pub opcode: u8,
-    pub flags: u8,
-    pub ahs_length: u8,
-    pub data_length: u32,
-    pub lun: u64,
-    pub itt: u32,
-    pub fields: [u8; 28],  // Opcode-specific fields
-    pub data: Vec<u8>,
+pub struct IscsiSession {
+    pub isid: [u8; 6],
+    pub tsih: u16,
+    pub cmd_sn: u32,
+    pub exp_cmd_sn: u32,
+    pub max_cmd_sn: u32,
+    pub stat_sn: u32,
+    pub state: SessionState,
+    pub params: SessionParams,
 }
 ```
 
-2. Implement parsing from bytes:
+2. Define session parameters:
 ```rust
-impl IscsiPdu {
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, IscsiError> {
-        // Parse 48-byte header
-        // Use byteorder crate for big-endian reads
-    }
+pub struct SessionParams {
+    pub max_recv_data_segment_length: u32,
+    pub max_burst_length: u32,
+    pub first_burst_length: u32,
+    pub target_name: String,
+    pub initiator_name: String,
 }
 ```
 
-3. Implement serialization to bytes:
+3. Implement the login state machine:
 ```rust
-impl IscsiPdu {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        // Serialize to 48-byte header + data
-    }
+pub enum SessionState {
+    SecurityNegotiation,
+    LoginOperationalNegotiation,
+    FullFeaturePhase,
+    Logout,
 }
 ```
 
-4. Add unit tests for each PDU type
+4. Handle parameter negotiation (key=value pairs)
 
-**Reference:** See IMPLEMENTATION.md for PDU format details
+**Reference:** RFC 3720 Sections 5-7 (Session management)
 
-**Dependencies to add:**
-```toml
-[dependencies]
-byteorder = "1.5"  # Already added
-```
-
-### After PDU Parsing Works
+### After Session Management Works
 
 Continue in this order:
 
-1. **Session Management** (`src/session.rs`)
-   - Login phase state machine
-   - Parameter negotiation
-   - Session lifecycle
-
-2. **SCSI Commands** (`src/scsi.rs`)
+1. **SCSI Commands** (`src/scsi.rs`)
    - INQUIRY, READ CAPACITY, READ/WRITE 10
    - Command parsing and response generation
 
-3. **Target Server** (`src/target.rs`)
+2. **Target Server** (`src/target.rs`)
    - TCP listener implementation
    - Connection handling
    - Wire everything together
@@ -164,15 +158,16 @@ Open these files side-by-side:
 
 Follow this sequence to minimize dependencies:
 
-### Phase 1: PDU Layer (2-3 days)
-- [ ] `src/pdu.rs` - Basic PDU structure
-- [ ] Parse LOGIN_REQUEST
-- [ ] Serialize LOGIN_RESPONSE
-- [ ] Parse SCSI_COMMAND
-- [ ] Serialize SCSI_RESPONSE
-- [ ] Unit tests for each PDU type
+### Phase 1: PDU Layer ✓ COMPLETE
+- [x] `src/pdu.rs` - Basic PDU structure (48-byte BHS)
+- [x] Parse LOGIN_REQUEST
+- [x] Serialize LOGIN_RESPONSE
+- [x] Parse SCSI_COMMAND
+- [x] Serialize SCSI_RESPONSE
+- [x] Parse/Serialize TEXT, NOP, LOGOUT, DATA-IN/OUT PDUs
+- [x] Unit tests (14 tests passing)
 
-### Phase 2: Session Layer (3-4 days)
+### Phase 2: Session Layer (NEXT)
 - [ ] `src/session.rs` - Session structure
 - [ ] Login state machine
 - [ ] Parameter negotiation

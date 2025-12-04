@@ -2,10 +2,11 @@
 
 This document outlines the implementation phases for completing the iscsi-target crate.
 
-## Current Status: Phase 0 - Foundation Complete ✓
+## Current Status: Phase 1 - PDU Support Complete ✓
 
-The API structure, trait definitions, and project foundation are complete.
+The API structure, trait definitions, project foundation, and PDU layer are complete.
 
+### Phase 0 - Foundation ✓
 - [x] ScsiBlockDevice trait definition
 - [x] IscsiTarget builder pattern API
 - [x] Error types and result handling
@@ -14,35 +15,21 @@ The API structure, trait definitions, and project foundation are complete.
 - [x] Project builds successfully
 - [x] Pushed to GitHub
 
-## Phase 1: Basic PDU Support
-
-Implement the core iSCSI PDU (Protocol Data Unit) parsing and serialization.
-
-**Goal:** Parse and generate basic iSCSI protocol messages
-
-**Files to implement:**
-- `src/pdu.rs` - PDU structure and parsing
-
-**Tasks:**
-- [ ] Define PDU header structure (48 bytes)
-- [ ] Implement BHS (Basic Header Segment) parsing
-- [ ] Implement AHS (Additional Header Segment) parsing
-- [ ] Add PDU serialization to bytes
-- [ ] Add PDU deserialization from bytes
-- [ ] Implement PDU validation
-- [ ] Add unit tests for PDU parsing
-
-**Key PDU Types to Support:**
-- Login Request/Response
-- Text Request/Response
-- SCSI Command/Response
-- SCSI Data-Out/Data-In
-- Logout Request/Response
-- NOP-Out/NOP-In
+### Phase 1 - PDU Support ✓
+- [x] Define PDU header structure (48 bytes BHS)
+- [x] Implement BHS (Basic Header Segment) parsing
+- [x] Add PDU serialization to bytes
+- [x] Add PDU deserialization from bytes
+- [x] Implement PDU validation
+- [x] Add unit tests for PDU parsing (14 tests passing)
+- [x] Login Request/Response PDUs
+- [x] Text Request/Response PDUs
+- [x] SCSI Command/Response PDUs
+- [x] SCSI Data-Out/Data-In PDUs
+- [x] Logout Request/Response PDUs
+- [x] NOP-Out/NOP-In PDUs
 
 **Reference:** RFC 3720 Section 10 (PDU formats)
-
-**Estimated Complexity:** Medium - Straightforward binary protocol parsing
 
 ## Phase 2: Session Management
 
