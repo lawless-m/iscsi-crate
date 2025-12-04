@@ -39,11 +39,11 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
         log::info!("Target name: {}", self.target_name);
 
         let listener = TcpListener::bind(&self.bind_addr)
-            .map_err(|e| IscsiError::Io(e))?;
+            .map_err(IscsiError::Io)?;
 
         // Set non-blocking for graceful shutdown checking
         listener.set_nonblocking(true)
-            .map_err(|e| IscsiError::Io(e))?;
+            .map_err(IscsiError::Io)?;
 
         self.running.store(true, Ordering::SeqCst);
 
@@ -100,9 +100,9 @@ fn handle_connection<D: ScsiBlockDevice>(
     running: Arc<AtomicBool>,
 ) -> ScsiResult<()> {
     // Set blocking mode and timeouts for the connection
-    stream.set_nonblocking(false).map_err(|e| IscsiError::Io(e))?;
-    stream.set_read_timeout(Some(Duration::from_secs(300))).map_err(|e| IscsiError::Io(e))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| IscsiError::Io(e))?;
+    stream.set_nonblocking(false).map_err(IscsiError::Io)?;
+    stream.set_read_timeout(Some(Duration::from_secs(300))).map_err(IscsiError::Io)?;
+    stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(IscsiError::Io)?;
 
     let mut session = IscsiSession::new();
     session.params.target_name = target_name.to_string();
@@ -166,12 +166,12 @@ fn handle_connection<D: ScsiBlockDevice>(
 fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
     // Read 48-byte BHS
     let mut bhs = [0u8; BHS_SIZE];
-    stream.read_exact(&mut bhs).map_err(|e| IscsiError::Io(e))?;
+    stream.read_exact(&mut bhs).map_err(IscsiError::Io)?;
 
     // Parse AHS length and data segment length from BHS
     let ahs_length = bhs[4] as usize * 4;
     let data_length = ((bhs[5] as u32) << 16) | ((bhs[6] as u32) << 8) | (bhs[7] as u32);
-    let padded_data_len = ((data_length as usize + 3) / 4) * 4;
+    let padded_data_len = (data_length as usize).div_ceil(4) * 4;
 
     // Read remaining data (AHS + data segment + padding)
     let total_len = BHS_SIZE + ahs_length + padded_data_len;
@@ -179,7 +179,7 @@ fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
     full_pdu[..BHS_SIZE].copy_from_slice(&bhs);
 
     if total_len > BHS_SIZE {
-        stream.read_exact(&mut full_pdu[BHS_SIZE..]).map_err(|e| IscsiError::Io(e))?;
+        stream.read_exact(&mut full_pdu[BHS_SIZE..]).map_err(IscsiError::Io)?;
     }
 
     IscsiPdu::from_bytes(&full_pdu)
@@ -188,8 +188,8 @@ fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
 /// Write a PDU to the TCP stream
 fn write_pdu(stream: &mut TcpStream, pdu: &IscsiPdu) -> ScsiResult<()> {
     let bytes = pdu.to_bytes();
-    stream.write_all(&bytes).map_err(|e| IscsiError::Io(e))?;
-    stream.flush().map_err(|e| IscsiError::Io(e))?;
+    stream.write_all(&bytes).map_err(IscsiError::Io)?;
+    stream.flush().map_err(IscsiError::Io)?;
     Ok(())
 }
 
@@ -402,7 +402,7 @@ fn handle_text_request(
 
     // Check for SendTargets request (discovery)
     let is_send_targets = text_req.parameters.iter()
-        .any(|(k, v)| k == "SendTargets" && (v == "All" || v == ""));
+        .any(|(k, v)| k == "SendTargets" && (v == "All" || v.is_empty()));
 
     let response_params = if is_send_targets && session.session_type == SessionType::Discovery {
         // Return target list

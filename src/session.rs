@@ -8,8 +8,10 @@ use crate::pdu::{self, IscsiPdu, LoginRequest, serialize_text_parameters};
 
 /// Session state machine states (RFC 3720 Section 5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum SessionState {
     /// Initial state, waiting for first login PDU
+    #[default]
     Free,
     /// Security negotiation phase (CHAP, etc.)
     SecurityNegotiation,
@@ -23,26 +25,18 @@ pub enum SessionState {
     Failed,
 }
 
-impl Default for SessionState {
-    fn default() -> Self {
-        SessionState::Free
-    }
-}
 
 /// Session type (RFC 3720 Section 5.2)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum SessionType {
     /// Normal session for SCSI commands
+    #[default]
     Normal,
     /// Discovery session for target discovery (SendTargets)
     Discovery,
 }
 
-impl Default for SessionType {
-    fn default() -> Self {
-        SessionType::Normal
-    }
-}
 
 /// Negotiated session parameters (RFC 3720 Section 12)
 #[derive(Debug, Clone)]
@@ -94,16 +88,13 @@ pub struct SessionParams {
 
 /// Digest type for header/data
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DigestType {
+    #[default]
     None,
     CRC32C,
 }
 
-impl Default for DigestType {
-    fn default() -> Self {
-        DigestType::None
-    }
-}
 
 impl Default for SessionParams {
     fn default() -> Self {
@@ -614,8 +605,10 @@ pub struct IscsiConnection {
 
 /// Connection states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ConnectionState {
     /// Initial state
+    #[default]
     Free,
     /// In login phase
     InLogin,
@@ -627,11 +620,6 @@ pub enum ConnectionState {
     Cleanup,
 }
 
-impl Default for ConnectionState {
-    fn default() -> Self {
-        ConnectionState::Free
-    }
-}
 
 impl IscsiConnection {
     /// Create a new connection

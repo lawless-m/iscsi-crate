@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Phase 4 (Target Server) complete - IMPLEMENTATION READY FOR TESTING
+**Status:** Phase 5 (Testing) - Ready for real-world initiator testing
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml

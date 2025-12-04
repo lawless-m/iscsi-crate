@@ -3,6 +3,9 @@
 //! This module handles the binary protocol format for iSCSI PDUs
 //! based on RFC 3720: https://datatracker.ietf.org/doc/html/rfc3720
 
+// Protocol functions require many parameters per RFC 3720
+#![allow(clippy::too_many_arguments)]
+
 use crate::error::{IscsiError, ScsiResult};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
 use std::io::Cursor;
@@ -181,37 +184,37 @@ impl IscsiPdu {
         let mut cursor = Cursor::new(buf);
 
         // Byte 0: Immediate flag (bit 6) and Opcode (bits 0-5)
-        let byte0 = cursor.read_u8().map_err(|e| IscsiError::Io(e))?;
+        let byte0 = cursor.read_u8().map_err(IscsiError::Io)?;
         let immediate = (byte0 & 0x40) != 0;
         let opcode = byte0 & 0x3F;
 
         // Byte 1: Flags (opcode-specific)
-        let flags = cursor.read_u8().map_err(|e| IscsiError::Io(e))?;
+        let flags = cursor.read_u8().map_err(IscsiError::Io)?;
 
         // Bytes 2-3: Reserved or opcode-specific
-        let _reserved = cursor.read_u16::<BigEndian>().map_err(|e| IscsiError::Io(e))?;
+        let _reserved = cursor.read_u16::<BigEndian>().map_err(IscsiError::Io)?;
 
         // Byte 4: Total AHS Length (4-byte units)
-        let ahs_length = cursor.read_u8().map_err(|e| IscsiError::Io(e))?;
+        let ahs_length = cursor.read_u8().map_err(IscsiError::Io)?;
 
         // Bytes 5-7: Data Segment Length (3 bytes, big-endian)
-        let ds_len_high = cursor.read_u8().map_err(|e| IscsiError::Io(e))? as u32;
-        let ds_len_low = cursor.read_u16::<BigEndian>().map_err(|e| IscsiError::Io(e))? as u32;
+        let ds_len_high = cursor.read_u8().map_err(IscsiError::Io)? as u32;
+        let ds_len_low = cursor.read_u16::<BigEndian>().map_err(IscsiError::Io)? as u32;
         let data_length = (ds_len_high << 16) | ds_len_low;
 
         // Bytes 8-15: LUN
-        let lun = cursor.read_u64::<BigEndian>().map_err(|e| IscsiError::Io(e))?;
+        let lun = cursor.read_u64::<BigEndian>().map_err(IscsiError::Io)?;
 
         // Bytes 16-19: Initiator Task Tag
-        let itt = cursor.read_u32::<BigEndian>().map_err(|e| IscsiError::Io(e))?;
+        let itt = cursor.read_u32::<BigEndian>().map_err(IscsiError::Io)?;
 
         // Bytes 20-47: Opcode-specific fields
         let mut specific = [0u8; 28];
-        std::io::Read::read_exact(&mut cursor, &mut specific).map_err(|e| IscsiError::Io(e))?;
+        std::io::Read::read_exact(&mut cursor, &mut specific).map_err(IscsiError::Io)?;
 
         // Calculate total expected length (BHS + AHS + data + padding)
         let ahs_bytes = (ahs_length as usize) * 4;
-        let padded_data_len = ((data_length as usize + 3) / 4) * 4; // Pad to 4-byte boundary
+        let padded_data_len = (data_length as usize).div_ceil(4) * 4; // Pad to 4-byte boundary
         let total_len = BHS_SIZE + ahs_bytes + padded_data_len;
 
         if buf.len() < total_len {
@@ -245,7 +248,7 @@ impl IscsiPdu {
     /// Serialize PDU to bytes
     pub fn to_bytes(&self) -> Vec<u8> {
         let ahs_bytes = (self.ahs_length as usize) * 4;
-        let padded_data_len = ((self.data.len() + 3) / 4) * 4;
+        let padded_data_len = self.data.len().div_ceil(4) * 4;
         let total_len = BHS_SIZE + ahs_bytes + padded_data_len;
 
         let mut buf = Vec::with_capacity(total_len);
@@ -320,7 +323,7 @@ impl IscsiPdu {
     /// Get the total PDU length including headers and padded data
     pub fn total_length(&self) -> usize {
         let ahs_bytes = (self.ahs_length as usize) * 4;
-        let padded_data_len = ((self.data.len() + 3) / 4) * 4;
+        let padded_data_len = self.data.len().div_ceil(4) * 4;
         BHS_SIZE + ahs_bytes + padded_data_len
     }
 }

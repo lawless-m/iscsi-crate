@@ -2,7 +2,7 @@
 
 This document outlines the implementation phases for completing the iscsi-target crate.
 
-## Current Status: Phase 4 - Target Server Implementation Complete ✓
+## Current Status: Phase 5 - Testing with Real Initiators (In Progress)
 
 The API structure, trait definitions, project foundation, PDU layer, session management, SCSI command handling, and target server implementation are complete.
 
