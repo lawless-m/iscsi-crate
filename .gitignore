@@ -1,0 +1,11 @@
+# Ignore everything by default
+*
+
+# Whitelist only what we want to sync
+!.gitignore
+!README.md
+!spellbook.png
+!commands/
+!commands/**
+!skills/
+!skills/**

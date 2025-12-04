@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/matthew.heath/Git/RocsMiddleware/PgQuery/**)",
+      "Read(//c/Users/matthew.heath/Git/JordanPrice/Services/**)",
+      "Read(//c/Users/matthew.heath/Git/**)",
+      "Read(//c/Users/matthew.heath/.claude/**)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd comprehensive README and update Logging skill with YAML header\n\n- Add detailed README.md documenting all four skills\n- Fix image reference in README (spellbook.png)\n- Update Logging/SKILL.md with proper YAML header and structure\n- Add Instructions, Examples, and Reference sections to Logging skill\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push)",
+      "Bash(where:*)",
+      "Bash(convert --version:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
