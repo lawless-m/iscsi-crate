@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Phase 3 (SCSI Command Handling) complete, ready for Target Server Implementation
+**Status:** Phase 4 (Target Server) complete - IMPLEMENTATION READY FOR TESTING
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml
@@ -23,61 +23,66 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 - ✓ **SCSI Command Handling (Phase 3 complete)**
 - ✓ All essential SCSI commands (INQUIRY, READ CAPACITY, READ/WRITE 10/16, etc.)
 - ✓ SCSI sense data generation for error reporting
-- ✓ 46 unit tests passing
+- ✓ **Target Server Implementation (Phase 4 complete)**
+- ✓ TCP listener on port 3260
+- ✓ Multi-threaded connection handling
+- ✓ Login and full feature phase handling
+- ✓ SCSI command processing with Data-In/Out
+- ✓ 51 unit tests passing
 
 **What's Next:**
-Implement the Target Server (Phase 4) to wire everything together with TCP.
+Test with real iSCSI initiators (Phase 5) - Linux, Windows, ESXi.
 
 ## Where to Start
 
-### Quick Start: Phase 4 - Target Server Implementation
+### Quick Start: Phase 5 - Testing with Real Initiators
 
-Complete `src/target.rs` to wire everything together.
+The implementation is complete. Now test with real iSCSI initiators.
 
-**Goal:** Complete end-to-end iSCSI target server
+**Goal:** Verify the target works with actual initiator software
 
-**File:** `src/target.rs`
-
-**Steps:**
-
-1. Implement TCP listener:
+**Running the target:**
 ```rust
-pub fn run(self) -> ScsiResult<()> {
-    let listener = TcpListener::bind(&self.bind_addr)?;
-    for stream in listener.incoming() {
-        let stream = stream?;
-        thread::spawn(move || handle_connection(stream));
-    }
-    Ok(())
+use iscsi_target::{IscsiTarget, ScsiBlockDevice};
+
+fn main() {
+    // Create your storage device (implement ScsiBlockDevice)
+    let device = MyStorageDevice::new(1024 * 1024 * 100); // 100MB
+
+    // Build and run the target
+    let target = IscsiTarget::builder()
+        .bind_addr("0.0.0.0:3260")
+        .target_name("iqn.2025-12.local:storage.disk1")
+        .build(device)
+        .expect("Failed to create target");
+
+    target.run().expect("Target failed");
 }
 ```
 
-2. Implement connection handler:
-```rust
-fn handle_connection(stream: TcpStream, device: Arc<Mutex<D>>) {
-    let mut session = IscsiSession::new();
-    // Login phase
-    // Full feature phase
-    // Command loop
-}
+**Testing with Linux:**
+```bash
+# Discover targets
+sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3260
+
+# Login to target
+sudo iscsiadm -m node -T iqn.2025-12.local:storage.disk1 -p 127.0.0.1:3260 --login
+
+# Check for new device (should appear as /dev/sdX)
+lsblk
+
+# Logout when done
+sudo iscsiadm -m node -T iqn.2025-12.local:storage.disk1 -p 127.0.0.1:3260 --logout
 ```
 
-3. Implement PDU read/write over TCP:
-```rust
-fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
-    // Read 48-byte BHS
-    // Read data segment if present
-    // Parse PDU
-}
+**Testing with Windows:**
+```powershell
+# Add target portal
+iscsicli AddTargetPortal 127.0.0.1 3260
 
-fn write_pdu(stream: &mut TcpStream, pdu: &IscsiPdu) -> ScsiResult<()> {
-    // Serialize and send PDU
-}
+# Login to target
+iscsicli LoginTarget iqn.2025-12.local:storage.disk1 T 127.0.0.1 3260 * * * * * * * * * * * * 0
 ```
-
-4. Wire together session + SCSI handlers
-
-**Reference:** RFC 3720 Section 8 (State transitions)
 
 ## Testing Approach
 
@@ -179,15 +184,18 @@ Follow this sequence to minimize dependencies:
 - [x] Sense data generation
 - [x] 18 tests (46 total)
 
-### Phase 4: Server Layer (NEXT)
-- [ ] `src/target.rs` - Complete implementation
-- [ ] TCP listener
-- [ ] Connection handler
-- [ ] Login phase handling
-- [ ] Full feature phase handling
-- [ ] Integration tests
+### Phase 4: Server Layer ✓ COMPLETE
+- [x] `src/target.rs` - Complete implementation
+- [x] TCP listener on port 3260
+- [x] Connection handler (multi-threaded)
+- [x] Login phase handling
+- [x] Full feature phase handling
+- [x] SCSI command processing with Data-In/Out
+- [x] Task management support
+- [x] Graceful shutdown
+- [x] 5 tests (51 total)
 
-### Phase 5: Testing (5-7 days)
+### Phase 5: Testing (NEXT)
 - [ ] Test with Linux initiator
 - [ ] Test with Windows initiator
 - [ ] Fix compatibility issues
