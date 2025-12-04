@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Phase 2 (Session Management) complete, ready for SCSI Command Handling
+**Status:** Phase 3 (SCSI Command Handling) complete, ready for Target Server Implementation
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml
@@ -20,58 +20,64 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 - ✓ IscsiSession with login state machine
 - ✓ Parameter negotiation (all RFC 3720 parameters)
 - ✓ Sequence number tracking (CmdSN, StatSN)
-- ✓ 28 unit tests passing
+- ✓ **SCSI Command Handling (Phase 3 complete)**
+- ✓ All essential SCSI commands (INQUIRY, READ CAPACITY, READ/WRITE 10/16, etc.)
+- ✓ SCSI sense data generation for error reporting
+- ✓ 46 unit tests passing
 
 **What's Next:**
-Implement SCSI Command Handling (Phase 3) to process SCSI commands.
+Implement the Target Server (Phase 4) to wire everything together with TCP.
 
 ## Where to Start
 
-### Quick Start: Phase 3 - SCSI Command Handling
+### Quick Start: Phase 4 - Target Server Implementation
 
-Start with `src/scsi.rs` - enhance with command handlers.
+Complete `src/target.rs` to wire everything together.
 
-**Goal:** Handle SCSI commands and translate to ScsiBlockDevice calls
+**Goal:** Complete end-to-end iSCSI target server
 
-**File:** `src/scsi.rs`
+**File:** `src/target.rs`
 
 **Steps:**
 
-1. Implement INQUIRY command handler:
+1. Implement TCP listener:
 ```rust
-pub fn handle_inquiry(cdb: &[u8], device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
-    // Return standard INQUIRY response (36+ bytes)
-    // Device type, vendor ID, product ID, etc.
+pub fn run(self) -> ScsiResult<()> {
+    let listener = TcpListener::bind(&self.bind_addr)?;
+    for stream in listener.incoming() {
+        let stream = stream?;
+        thread::spawn(move || handle_connection(stream));
+    }
+    Ok(())
 }
 ```
 
-2. Implement READ CAPACITY 10/16:
+2. Implement connection handler:
 ```rust
-pub fn handle_read_capacity_10(device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
-    // Return 8 bytes: last LBA (4 bytes) + block size (4 bytes)
+fn handle_connection(stream: TcpStream, device: Arc<Mutex<D>>) {
+    let mut session = IscsiSession::new();
+    // Login phase
+    // Full feature phase
+    // Command loop
 }
 ```
 
-3. Implement READ 10/16 and WRITE 10/16:
+3. Implement PDU read/write over TCP:
 ```rust
-pub fn handle_read_10(cdb: &[u8], device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
-    // Parse LBA and transfer length from CDB
-    // Call device.read() and return data
+fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
+    // Read 48-byte BHS
+    // Read data segment if present
+    // Parse PDU
+}
+
+fn write_pdu(stream: &mut TcpStream, pdu: &IscsiPdu) -> ScsiResult<()> {
+    // Serialize and send PDU
 }
 ```
 
-4. Generate SCSI sense data for errors
+4. Wire together session + SCSI handlers
 
-**Reference:** SCSI Block Commands (SBC-4) specification
-
-### After SCSI Commands Work
-
-Continue in this order:
-
-1. **Target Server** (`src/target.rs`)
-   - TCP listener implementation
-   - Connection handling
-   - Wire everything together
+**Reference:** RFC 3720 Section 8 (State transitions)
 
 ## Testing Approach
 
@@ -163,16 +169,17 @@ Follow this sequence to minimize dependencies:
 - [x] Session tests (14 tests, 28 total)
 - [x] Discovery session support
 
-### Phase 3: SCSI Layer (NEXT)
-- [ ] `src/scsi.rs` - SCSI command handlers
-- [ ] INQUIRY command
-- [ ] READ CAPACITY 10
-- [ ] READ 10
-- [ ] WRITE 10
-- [ ] SCSI response generation
-- [ ] Command tests
+### Phase 3: SCSI Layer ✓ COMPLETE
+- [x] `src/scsi.rs` - SCSI command handlers
+- [x] INQUIRY command (standard + VPD pages)
+- [x] READ CAPACITY 10/16
+- [x] READ 10/16, WRITE 10/16
+- [x] MODE SENSE 6/10, REQUEST SENSE, REPORT LUNS
+- [x] SYNCHRONIZE CACHE, START STOP UNIT, VERIFY
+- [x] Sense data generation
+- [x] 18 tests (46 total)
 
-### Phase 4: Server Layer (3-5 days)
+### Phase 4: Server Layer (NEXT)
 - [ ] `src/target.rs` - Complete implementation
 - [ ] TCP listener
 - [ ] Connection handler

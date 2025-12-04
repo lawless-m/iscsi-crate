@@ -2,9 +2,9 @@
 
 This document outlines the implementation phases for completing the iscsi-target crate.
 
-## Current Status: Phase 2 - Session Management Complete ✓
+## Current Status: Phase 3 - SCSI Command Handling Complete ✓
 
-The API structure, trait definitions, project foundation, PDU layer, and session management are complete.
+The API structure, trait definitions, project foundation, PDU layer, session management, and SCSI command handling are complete.
 
 ### Phase 0 - Foundation ✓
 - [x] ScsiBlockDevice trait definition
@@ -45,40 +45,24 @@ The API structure, trait definitions, project foundation, PDU layer, and session
 
 **Reference:** RFC 3720 Sections 5-7 (Session management)
 
-## Phase 3: SCSI Command Handling
+### Phase 3 - SCSI Command Handling ✓
+- [x] Parse SCSI CDB (Command Descriptor Block)
+- [x] Implement INQUIRY command handler (standard + VPD pages)
+- [x] Implement READ CAPACITY (10/16) handlers
+- [x] Implement TEST UNIT READY handler
+- [x] Implement READ (10/16) handlers
+- [x] Implement WRITE (10/16) handlers
+- [x] Implement VERIFY command
+- [x] Implement MODE SENSE (6/10) handlers
+- [x] Implement REQUEST SENSE handler
+- [x] Implement REPORT LUNS handler
+- [x] Implement SYNCHRONIZE CACHE handler
+- [x] Implement START STOP UNIT handler
+- [x] Generate SCSI response with proper status codes
+- [x] Handle SCSI sense data for errors
+- [x] Add command handler tests (18 tests, 46 total)
 
-Implement SCSI command processing and response generation.
-
-**Goal:** Handle SCSI commands and translate to ScsiBlockDevice calls
-
-**Files to implement:**
-- Enhance `src/scsi.rs` with command handlers
-
-**Tasks:**
-- [ ] Parse SCSI CDB (Command Descriptor Block)
-- [ ] Implement INQUIRY command handler
-- [ ] Implement READ CAPACITY (10/16) handlers
-- [ ] Implement TEST UNIT READY handler
-- [ ] Implement READ (10/16) handlers
-- [ ] Implement WRITE (10/16) handlers
-- [ ] Implement VERIFY command
-- [ ] Generate SCSI response PDUs
-- [ ] Handle SCSI sense data for errors
-- [ ] Add command handler tests
-
-**SCSI Commands Priority:**
-1. INQUIRY - Device identification
-2. READ CAPACITY - Get device size
-3. TEST UNIT READY - Check device ready
-4. READ 10/16 - Read data
-5. WRITE 10/16 - Write data
-6. VERIFY - Verify written data
-
-**Reference:** 
-- RFC 3720 Section 10.3 (SCSI Command)
-- SCSI Block Commands (SBC-4) specification
-
-**Estimated Complexity:** Medium - Well-defined command formats
+**Reference:** SCSI Block Commands (SBC-4) specification
 
 ## Phase 4: Target Server Implementation
 
