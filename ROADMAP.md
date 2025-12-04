@@ -2,9 +2,9 @@
 
 This document outlines the implementation phases for completing the iscsi-target crate.
 
-## Current Status: Phase 1 - PDU Support Complete ✓
+## Current Status: Phase 2 - Session Management Complete ✓
 
-The API structure, trait definitions, project foundation, and PDU layer are complete.
+The API structure, trait definitions, project foundation, PDU layer, and session management are complete.
 
 ### Phase 0 - Foundation ✓
 - [x] ScsiBlockDevice trait definition
@@ -31,34 +31,19 @@ The API structure, trait definitions, project foundation, and PDU layer are comp
 
 **Reference:** RFC 3720 Section 10 (PDU formats)
 
-## Phase 2: Session Management
-
-Implement connection and session state management.
-
-**Goal:** Handle iSCSI login, negotiation, and session lifecycle
-
-**Files to implement:**
-- `src/session.rs` - Session and connection management
-
-**Tasks:**
-- [ ] Define Session structure
-- [ ] Define Connection structure
-- [ ] Implement login state machine
-- [ ] Handle parameter negotiation (MaxRecvDataSegmentLength, etc.)
-- [ ] Implement session authentication (none/CHAP)
-- [ ] Track command sequence numbers (CmdSN, StatSN)
-- [ ] Handle logout and session cleanup
-- [ ] Add session state tests
-
-**Key Concepts:**
-- Discovery session vs Normal session
-- Leading connection vs additional connections
-- Text negotiation key=value pairs
-- TSIH (Target Session Identifying Handle)
+### Phase 2 - Session Management ✓
+- [x] Define Session structure (IscsiSession)
+- [x] Define Connection structure (IscsiConnection)
+- [x] Implement login state machine (SessionState enum)
+- [x] Handle parameter negotiation (all RFC 3720 parameters)
+- [x] Implement session authentication (None, ready for CHAP)
+- [x] Track command sequence numbers (CmdSN, StatSN, ExpCmdSN)
+- [x] Handle logout and session cleanup
+- [x] Add session state tests (14 tests passing, 28 total)
+- [x] Discovery session support (SendTargets)
+- [x] Digest type negotiation (None/CRC32C)
 
 **Reference:** RFC 3720 Sections 5-7 (Session management)
-
-**Estimated Complexity:** Medium-High - State machine logic
 
 ## Phase 3: SCSI Command Handling
 

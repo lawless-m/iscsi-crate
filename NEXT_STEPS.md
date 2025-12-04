@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Phase 1 (PDU Support) complete, ready for Session Management
+**Status:** Phase 2 (Session Management) complete, ready for SCSI Command Handling
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml
@@ -16,71 +16,59 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 - ✓ Pushed to GitHub: https://github.com/lawless-m/iscsi-crate
 - ✓ **PDU parsing and serialization (Phase 1 complete)**
 - ✓ All PDU types implemented (Login, Text, SCSI, Data-In/Out, NOP, Logout)
-- ✓ 14 unit tests passing
+- ✓ **Session Management (Phase 2 complete)**
+- ✓ IscsiSession with login state machine
+- ✓ Parameter negotiation (all RFC 3720 parameters)
+- ✓ Sequence number tracking (CmdSN, StatSN)
+- ✓ 28 unit tests passing
 
 **What's Next:**
-Implement Session Management (Phase 2) to handle login and connection state.
+Implement SCSI Command Handling (Phase 3) to process SCSI commands.
 
 ## Where to Start
 
-### Quick Start: Phase 2 - Session Management
+### Quick Start: Phase 3 - SCSI Command Handling
 
-Start with `src/session.rs` - this handles connection and session state.
+Start with `src/scsi.rs` - enhance with command handlers.
 
-**Goal:** Handle iSCSI login, negotiation, and session lifecycle
+**Goal:** Handle SCSI commands and translate to ScsiBlockDevice calls
 
-**File:** `src/session.rs`
+**File:** `src/scsi.rs`
 
 **Steps:**
 
-1. Define the Session structure:
+1. Implement INQUIRY command handler:
 ```rust
-pub struct IscsiSession {
-    pub isid: [u8; 6],
-    pub tsih: u16,
-    pub cmd_sn: u32,
-    pub exp_cmd_sn: u32,
-    pub max_cmd_sn: u32,
-    pub stat_sn: u32,
-    pub state: SessionState,
-    pub params: SessionParams,
+pub fn handle_inquiry(cdb: &[u8], device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
+    // Return standard INQUIRY response (36+ bytes)
+    // Device type, vendor ID, product ID, etc.
 }
 ```
 
-2. Define session parameters:
+2. Implement READ CAPACITY 10/16:
 ```rust
-pub struct SessionParams {
-    pub max_recv_data_segment_length: u32,
-    pub max_burst_length: u32,
-    pub first_burst_length: u32,
-    pub target_name: String,
-    pub initiator_name: String,
+pub fn handle_read_capacity_10(device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
+    // Return 8 bytes: last LBA (4 bytes) + block size (4 bytes)
 }
 ```
 
-3. Implement the login state machine:
+3. Implement READ 10/16 and WRITE 10/16:
 ```rust
-pub enum SessionState {
-    SecurityNegotiation,
-    LoginOperationalNegotiation,
-    FullFeaturePhase,
-    Logout,
+pub fn handle_read_10(cdb: &[u8], device: &dyn ScsiBlockDevice) -> ScsiResult<Vec<u8>> {
+    // Parse LBA and transfer length from CDB
+    // Call device.read() and return data
 }
 ```
 
-4. Handle parameter negotiation (key=value pairs)
+4. Generate SCSI sense data for errors
 
-**Reference:** RFC 3720 Sections 5-7 (Session management)
+**Reference:** SCSI Block Commands (SBC-4) specification
 
-### After Session Management Works
+### After SCSI Commands Work
 
 Continue in this order:
 
-1. **SCSI Commands** (`src/scsi.rs`)
-   - INQUIRY, READ CAPACITY, READ/WRITE 10
-   - Command parsing and response generation
-
-2. **Target Server** (`src/target.rs`)
+1. **Target Server** (`src/target.rs`)
    - TCP listener implementation
    - Connection handling
    - Wire everything together
@@ -167,14 +155,15 @@ Follow this sequence to minimize dependencies:
 - [x] Parse/Serialize TEXT, NOP, LOGOUT, DATA-IN/OUT PDUs
 - [x] Unit tests (14 tests passing)
 
-### Phase 2: Session Layer (NEXT)
-- [ ] `src/session.rs` - Session structure
-- [ ] Login state machine
-- [ ] Parameter negotiation
-- [ ] Sequence number tracking
-- [ ] Session tests
+### Phase 2: Session Layer ✓ COMPLETE
+- [x] `src/session.rs` - Session structure (IscsiSession)
+- [x] Login state machine (SessionState enum)
+- [x] Parameter negotiation (all RFC 3720 params)
+- [x] Sequence number tracking (CmdSN, StatSN, ExpCmdSN)
+- [x] Session tests (14 tests, 28 total)
+- [x] Discovery session support
 
-### Phase 3: SCSI Layer (2-3 days)
+### Phase 3: SCSI Layer (NEXT)
 - [ ] `src/scsi.rs` - SCSI command handlers
 - [ ] INQUIRY command
 - [ ] READ CAPACITY 10
