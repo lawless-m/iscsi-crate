@@ -95,18 +95,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build and configure the target
     let target = IscsiTarget::builder()
-        .bind_addr("0.0.0.0:3260")
+        .bind_addr("0.0.0.0:3261")
         .target_name("iqn.2025-12.local:storage.memory-disk")
         .build(storage)?;
 
     println!("\niSCSI target configured:");
     println!("  Target name: iqn.2025-12.local:storage.memory-disk");
-    println!("  Listen address: 0.0.0.0:3260");
+    println!("  Listen address: 0.0.0.0:3261");
     println!("\nTo connect from Linux:");
-    println!("  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3260");
-    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3260 --login");
+    println!("  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3261");
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --login");
     println!("\nTo disconnect:");
-    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3260 --logout");
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --logout");
     println!("\nStarting iSCSI target server...\n");
 
     // Run the target

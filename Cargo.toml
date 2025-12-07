@@ -28,3 +28,7 @@ path = "src/lib.rs"
 [[example]]
 name = "simple_target"
 path = "examples/simple_target.rs"
+
+[[example]]
+name = "chap_target"
+path = "examples/chap_target.rs"

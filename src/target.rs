@@ -23,6 +23,7 @@ pub struct IscsiTarget<D: ScsiBlockDevice> {
     target_alias: String,
     device: Arc<Mutex<D>>,
     running: Arc<AtomicBool>,
+    auth_config: crate::auth::AuthConfig,
 }
 
 impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
@@ -57,10 +58,11 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
                     let device = Arc::clone(&self.device);
                     let target_name = self.target_name.clone();
                     let target_alias = self.target_alias.clone();
+                    let auth_config = self.auth_config.clone();
                     let running = Arc::clone(&self.running);
 
                     thread::spawn(move || {
-                        if let Err(e) = handle_connection(stream, device, &target_name, &target_alias, running) {
+                        if let Err(e) = handle_connection(stream, device, &target_name, &target_alias, auth_config, running) {
                             log::error!("Connection error from {}: {}", addr, e);
                         }
                         log::info!("Connection closed from {}", addr);
@@ -97,6 +99,7 @@ fn handle_connection<D: ScsiBlockDevice>(
     device: Arc<Mutex<D>>,
     target_name: &str,
     target_alias: &str,
+    auth_config: crate::auth::AuthConfig,
     running: Arc<AtomicBool>,
 ) -> ScsiResult<()> {
     // Get the local address that the client connected to
@@ -109,6 +112,7 @@ fn handle_connection<D: ScsiBlockDevice>(
     let mut session = IscsiSession::new();
     session.params.target_name = target_name.to_string();
     session.params.target_alias = target_alias.to_string();
+    session.set_auth_config(auth_config);
 
     // Main connection loop
     while running.load(Ordering::SeqCst) {
@@ -640,6 +644,7 @@ pub struct IscsiTargetBuilder<D: ScsiBlockDevice> {
     bind_addr: Option<String>,
     target_name: Option<String>,
     target_alias: Option<String>,
+    auth_config: crate::auth::AuthConfig,
     _phantom: std::marker::PhantomData<D>,
 }
 
@@ -649,6 +654,7 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
             bind_addr: None,
             target_name: None,
             target_alias: None,
+            auth_config: crate::auth::AuthConfig::None,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -673,6 +679,12 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
         self
     }
 
+    /// Set the authentication configuration
+    pub fn with_auth(mut self, auth_config: crate::auth::AuthConfig) -> Self {
+        self.auth_config = auth_config;
+        self
+    }
+
     /// Build the target with the specified storage device
     pub fn build(self, device: D) -> ScsiResult<IscsiTarget<D>> {
         let bind_addr = self.bind_addr.unwrap_or_else(|| format!("0.0.0.0:{}", ISCSI_PORT));
@@ -694,6 +706,7 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
             target_alias,
             device: Arc::new(Mutex::new(device)),
             running: Arc::new(AtomicBool::new(false)),
+            auth_config: self.auth_config,
         })
     }
 }
