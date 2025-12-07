@@ -175,8 +175,10 @@ pub struct IscsiSession {
     // Authentication
     /// Authentication configuration for this session
     pub auth_config: AuthConfig,
-    /// CHAP authentication state (if using CHAP)
+    /// CHAP authentication state for initiator-to-target (if using CHAP)
     pub chap_state: Option<ChapAuthState>,
+    /// CHAP authentication state for target-to-initiator (if using Mutual CHAP)
+    pub target_chap_state: Option<ChapAuthState>,
 }
 
 impl Default for IscsiSession {
@@ -203,6 +205,7 @@ impl IscsiSession {
             pending_writes: HashMap::new(),
             auth_config: AuthConfig::None,
             chap_state: None,
+            target_chap_state: None,
         }
     }
 
@@ -322,12 +325,51 @@ impl IscsiSession {
                                 log::info!("CHAP authentication successful for user '{}'", username);
 
                                 // Check if mutual CHAP is required
-                                if let AuthConfig::MutualChap { .. } = &self.auth_config {
-                                    // TODO: Implement mutual CHAP (target authenticating to initiator)
-                                    log::debug!("Mutual CHAP not yet implemented");
+                                if let AuthConfig::MutualChap { target_credentials, .. } = &self.auth_config {
+                                    // In mutual CHAP, initiator may send a challenge to target
+                                    // Check if initiator sent CHAP_I and CHAP_C (target auth)
+                                    let target_chap_i = login_params.iter()
+                                        .find(|(k, _)| k == "CHAP_I")
+                                        .map(|(_, v)| v.as_str());
+                                    let target_chap_c = login_params.iter()
+                                        .find(|(k, _)| k == "CHAP_C")
+                                        .map(|(_, v)| v.as_str());
+
+                                    if let (Some(chap_i), Some(chap_c_hex)) = (target_chap_i, target_chap_c) {
+                                        // Initiator is challenging us - respond with target's credentials
+                                        log::debug!("Mutual CHAP: Received challenge from initiator (I={}, C={})", chap_i, &chap_c_hex[..20.min(chap_c_hex.len())]);
+
+                                        // Parse challenge
+                                        let identifier = chap_i.parse::<u8>().map_err(|e|
+                                            IscsiError::Auth(format!("Invalid CHAP_I: {}", e)))?;
+
+                                        // Remove "0x" prefix if present
+                                        let chap_c_clean = chap_c_hex.strip_prefix("0x").unwrap_or(chap_c_hex);
+                                        let challenge = hex::decode(chap_c_clean).map_err(|e|
+                                            IscsiError::Auth(format!("Invalid CHAP_C hex: {}", e)))?;
+
+                                        // Calculate target's response
+                                        let mut data = Vec::new();
+                                        data.push(identifier);
+                                        data.extend_from_slice(target_credentials.secret.as_bytes());
+                                        data.extend_from_slice(&challenge);
+                                        let target_response = md5::compute(&data).0.to_vec();
+
+                                        let response_hex = target_response.iter()
+                                            .map(|b| format!("{:02x}", b))
+                                            .collect::<String>();
+
+                                        let params = vec![
+                                            ("CHAP_N".to_string(), target_credentials.username.clone()),
+                                            ("CHAP_R".to_string(), response_hex),
+                                        ];
+
+                                        log::info!("Mutual CHAP: Both parties authenticated successfully");
+                                        return Ok((true, params)); // Send target's response and complete auth
+                                    }
                                 }
 
-                                Ok((true, vec![])) // Authenticated successfully
+                                Ok((true, vec![])) // Authenticated successfully (one-way CHAP)
                             } else {
                                 log::warn!("CHAP authentication failed: invalid response for user '{}'", username);
                                 Err(IscsiError::Auth("Invalid CHAP response".to_string()))
