@@ -4,8 +4,8 @@
 
 use crate::error::{IscsiError, ScsiResult};
 use crate::pdu::{self, IscsiPdu, BHS_SIZE, opcode, flags, scsi_status, serialize_text_parameters};
-use crate::scsi::{ScsiBlockDevice, ScsiHandler};
-use crate::session::{IscsiSession, SessionState, SessionType};
+use crate::scsi::{ScsiBlockDevice, ScsiHandler, ScsiResponse};
+use crate::session::{IscsiSession, PendingWrite, SessionState, SessionType};
 use byteorder::{BigEndian, ByteOrder};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, Shutdown};
@@ -99,6 +99,8 @@ fn handle_connection<D: ScsiBlockDevice>(
     target_alias: &str,
     running: Arc<AtomicBool>,
 ) -> ScsiResult<()> {
+    // Get the local address that the client connected to
+    let local_addr = stream.local_addr().map_err(IscsiError::Io)?;
     // Set blocking mode and timeouts for the connection
     stream.set_nonblocking(false).map_err(IscsiError::Io)?;
     stream.set_read_timeout(Some(Duration::from_secs(300))).map_err(IscsiError::Io)?;
@@ -133,12 +135,13 @@ fn handle_connection<D: ScsiBlockDevice>(
         log::debug!("Received PDU: {} (opcode 0x{:02x})", pdu.opcode_name(), pdu.opcode);
 
         // Process PDU based on session state
+        let target_address = local_addr.to_string();
         let response = match session.state {
             SessionState::Free | SessionState::SecurityNegotiation | SessionState::LoginOperationalNegotiation => {
-                handle_login_phase(&mut session, &pdu, target_name)?
+                handle_login_phase(&mut session, &pdu, target_name, &target_address)?
             }
             SessionState::FullFeaturePhase => {
-                handle_full_feature_phase(&mut session, &pdu, &device, target_name)?
+                handle_full_feature_phase(&mut session, &pdu, &device, target_name, &target_address)?
             }
             SessionState::Logout => {
                 log::info!("Session logout complete");
@@ -182,12 +185,32 @@ fn read_pdu(stream: &mut TcpStream) -> ScsiResult<IscsiPdu> {
         stream.read_exact(&mut full_pdu[BHS_SIZE..]).map_err(IscsiError::Io)?;
     }
 
-    IscsiPdu::from_bytes(&full_pdu)
+    let pdu = IscsiPdu::from_bytes(&full_pdu)?;
+
+    // Log received PDU header details
+    if full_pdu.len() >= 48 {
+        log::debug!("Received PDU header hex: {}", full_pdu[0..48].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
+        log::debug!("  [0] Opcode: 0x{:02x}", full_pdu[0]);
+        log::debug!("  [1] Flags: 0x{:02x}", full_pdu[1]);
+        log::debug!("  [5-7] DataSegmentLength: {} bytes", (full_pdu[5] as u32) << 16 | (full_pdu[6] as u32) << 8 | full_pdu[7] as u32);
+    }
+
+    Ok(pdu)
 }
 
 /// Write a PDU to the TCP stream
 fn write_pdu(stream: &mut TcpStream, pdu: &IscsiPdu) -> ScsiResult<()> {
     let bytes = pdu.to_bytes();
+
+    // Log PDU header in detail
+    if bytes.len() >= 48 {
+        log::debug!("PDU Header hex: {}", bytes[0..48].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
+        log::debug!("  [0] Opcode: 0x{:02x}", bytes[0]);
+        log::debug!("  [1] Flags: 0x{:02x}", bytes[1]);
+        log::debug!("  [5-7] DataSegmentLength: {} bytes", (bytes[5] as u32) << 16 | (bytes[6] as u32) << 8 | bytes[7] as u32);
+        log::debug!("  Data segment ({} bytes): {:?}", bytes.len() - 48, String::from_utf8_lossy(&bytes[48..]));
+    }
+
     stream.write_all(&bytes).map_err(IscsiError::Io)?;
     stream.flush().map_err(IscsiError::Io)?;
     Ok(())
@@ -198,6 +221,7 @@ fn handle_login_phase(
     session: &mut IscsiSession,
     pdu: &IscsiPdu,
     target_name: &str,
+    target_address: &str,
 ) -> ScsiResult<Vec<IscsiPdu>> {
     match pdu.opcode {
         opcode::LOGIN_REQUEST => {
@@ -206,7 +230,7 @@ fn handle_login_phase(
         }
         opcode::TEXT_REQUEST => {
             // Text request during login (e.g., SendTargets for discovery)
-            handle_text_request(session, pdu, target_name)
+            handle_text_request(session, pdu, target_name, target_address)
         }
         _ => {
             log::warn!("Unexpected opcode 0x{:02x} during login phase", pdu.opcode);
@@ -222,6 +246,7 @@ fn handle_full_feature_phase<D: ScsiBlockDevice>(
     pdu: &IscsiPdu,
     device: &Arc<Mutex<D>>,
     target_name: &str,
+    target_address: &str,
 ) -> ScsiResult<Vec<IscsiPdu>> {
     match pdu.opcode {
         opcode::SCSI_COMMAND => {
@@ -239,7 +264,7 @@ fn handle_full_feature_phase<D: ScsiBlockDevice>(
             Ok(vec![response])
         }
         opcode::TEXT_REQUEST => {
-            handle_text_request(session, pdu, target_name)
+            handle_text_request(session, pdu, target_name, target_address)
         }
         opcode::TASK_MANAGEMENT_REQUEST => {
             handle_task_management(session, pdu)
@@ -260,8 +285,8 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
     let cmd = pdu.parse_scsi_command()?;
 
     log::debug!(
-        "SCSI Command: CDB[0]=0x{:02x}, LUN={}, ITT=0x{:08x}, ExpLen={}",
-        cmd.cdb[0], cmd.lun, cmd.itt, cmd.expected_data_length
+        "SCSI Command: CDB[0]=0x{:02x}, LUN={}, ITT=0x{:08x}, ExpLen={}, read={}, write={}, final={}, data_len={}",
+        cmd.cdb[0], cmd.lun, cmd.itt, cmd.expected_data_length, cmd.read, cmd.write, cmd.final_flag, pdu.data.len()
     );
 
     // Validate command sequence number
@@ -270,14 +295,148 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         log::warn!("Invalid CmdSN: {}, expected: {}", cmd_sn, session.exp_cmd_sn);
     }
 
-    let device_guard = device.lock().map_err(|_| {
-        IscsiError::Scsi("Device lock poisoned".to_string())
-    })?;
+    // Check command type
+    let opcode = cmd.cdb[0];
+    let is_sync_cache = opcode == 0x35 || opcode == 0x91;
+    let is_write_cmd = matches!(opcode, 0x0a | 0x2a | 0x8a);
 
-    // Handle the SCSI command
-    let response = ScsiHandler::handle_command(&cmd.cdb, &*device_guard, None)?;
+    // Handle WRITE commands separately (they use immediate data or Data-Out PDUs)
+    if is_write_cmd {
+        // Extract LBA and transfer length from CDB
+        let (lba, transfer_length) = match opcode {
+            0x0a | 0x2a => {
+                // WRITE(6) or WRITE(10)
+                if opcode == 0x0a && cmd.cdb.len() >= 6 {
+                    // WRITE(6): LBA is 21 bits in bytes 1-3
+                    let lba_21 = ((cmd.cdb[1] as u32 & 0x1F) << 16)
+                               | ((cmd.cdb[2] as u32) << 8)
+                               | (cmd.cdb[3] as u32);
+                    let length = cmd.cdb[4] as u32;
+                    (lba_21 as u64, length)
+                } else if opcode == 0x2a && cmd.cdb.len() >= 10 {
+                    // WRITE(10): LBA is 32 bits in bytes 2-5
+                    let lba = BigEndian::read_u32(&cmd.cdb[2..6]) as u64;
+                    let length = BigEndian::read_u16(&cmd.cdb[7..9]) as u32;
+                    (lba, length)
+                } else {
+                    (0, 0)
+                }
+            }
+            0x8a => {
+                // WRITE(16): LBA is 64 bits in bytes 2-9
+                if cmd.cdb.len() >= 16 {
+                    let lba = BigEndian::read_u64(&cmd.cdb[2..10]);
+                    let length = BigEndian::read_u32(&cmd.cdb[10..14]);
+                    (lba, length)
+                } else {
+                    (0, 0)
+                }
+            }
+            _ => (0, 0),
+        };
 
-    drop(device_guard);
+        if transfer_length > 0 {
+            let device_guard = device.lock().map_err(|_| {
+                IscsiError::Scsi("Device lock poisoned".to_string())
+            })?;
+            let block_size = device_guard.block_size();
+            drop(device_guard);
+
+            // Check if immediate data is present in this PDU
+            if !pdu.data.is_empty() {
+                log::debug!(
+                    "WRITE command with immediate data: ITT=0x{:08x}, LBA={}, {} bytes",
+                    cmd.itt, lba, pdu.data.len()
+                );
+
+                // Write the immediate data
+                let mut device_guard = device.lock().map_err(|_| {
+                    IscsiError::Scsi("Device lock poisoned".to_string())
+                })?;
+
+                let write_result = device_guard.write(lba, &pdu.data, block_size);
+                drop(device_guard);
+
+                if let Err(e) = write_result {
+                    log::error!("Write failed: {}", e);
+                    let sense = crate::scsi::SenseData::medium_error();
+                    return Ok(vec![IscsiPdu::scsi_response(
+                        cmd.itt,
+                        session.next_stat_sn(),
+                        session.exp_cmd_sn,
+                        session.max_cmd_sn,
+                        pdu::scsi_status::CHECK_CONDITION,
+                        0,
+                        0,
+                        Some(&sense.to_bytes()),
+                    )]);
+                }
+
+                // If this is the final PDU and all data has been received, send success response
+                if cmd.final_flag && pdu.data.len() as u32 >= transfer_length * block_size {
+                    log::debug!(
+                        "Write complete: ITT=0x{:08x}, {} bytes written",
+                        cmd.itt, pdu.data.len()
+                    );
+                    return Ok(vec![IscsiPdu::scsi_response(
+                        cmd.itt,
+                        session.next_stat_sn(),
+                        session.exp_cmd_sn,
+                        session.max_cmd_sn,
+                        pdu::scsi_status::GOOD,
+                        0,
+                        0,
+                        None,
+                    )]);
+                } else {
+                    // Store pending write for additional Data-Out PDUs
+                    session.pending_writes.insert(cmd.itt, PendingWrite {
+                        lba,
+                        transfer_length,
+                        block_size,
+                        bytes_received: pdu.data.len() as u32,
+                    });
+                }
+            } else {
+                // No immediate data, expect Data-Out PDUs
+                session.pending_writes.insert(cmd.itt, PendingWrite {
+                    lba,
+                    transfer_length,
+                    block_size,
+                    bytes_received: 0,
+                });
+
+                log::debug!(
+                    "Stored pending write: ITT=0x{:08x}, LBA={}, blocks={}, block_size={}",
+                    cmd.itt, lba, transfer_length, block_size
+                );
+            }
+        }
+
+        // For write commands, we've handled immediate data or stored pending writes
+        // Return empty - responses will be sent when data is complete
+        return Ok(vec![]);
+    }
+
+    // Handle non-write commands (reads, inquiries, etc.)
+    let response = if is_sync_cache {
+        // SYNCHRONIZE CACHE needs mutable access to call flush()
+        let mut device_guard = device.lock().map_err(|_| {
+            IscsiError::Scsi("Device lock poisoned".to_string())
+        })?;
+
+        log::debug!("Calling flush() for SYNCHRONIZE CACHE command");
+        device_guard.flush()?;
+
+        ScsiResponse::good_no_data()
+    } else {
+        // Other commands use immutable access
+        let device_guard = device.lock().map_err(|_| {
+            IscsiError::Scsi("Device lock poisoned".to_string())
+        })?;
+
+        ScsiHandler::handle_command(&cmd.cdb, &*device_guard, None)?
+    };
 
     // Build response PDU(s)
     let mut responses = Vec::new();
@@ -344,33 +503,52 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
         data_out.itt, data_out.data_sn, data_out.buffer_offset, data_out.data.len()
     );
 
-    // For simplicity, we'll handle immediate/unsolicited writes here
-    // In a full implementation, we'd track the original command and accumulate data
+    // Look up the pending write command
+    let pending_write = session.pending_writes.get_mut(&data_out.itt);
 
-    // If this is the final data PDU, we need to send a response
+    if pending_write.is_none() {
+        log::warn!("Received Data-Out for unknown ITT=0x{:08x}", data_out.itt);
+        return Ok(vec![]);
+    }
+
+    let pending = pending_write.unwrap();
+    let block_size = pending.block_size;
+
+    // Calculate the LBA for this chunk based on buffer_offset
+    let lba = pending.lba + (data_out.buffer_offset / block_size) as u64;
+
+    // Write the data
+    let mut device_guard = device.lock().map_err(|_| {
+        IscsiError::Scsi("Device lock poisoned".to_string())
+    })?;
+
+    let write_result = device_guard.write(lba, &data_out.data, block_size);
+    drop(device_guard);
+
+    // Update bytes received
+    pending.bytes_received += data_out.data.len() as u32;
+
+    log::debug!(
+        "Wrote {} bytes to LBA {}, total received: {}/{}",
+        data_out.data.len(),
+        lba,
+        pending.bytes_received,
+        pending.transfer_length * block_size
+    );
+
+    let (status, sense) = match write_result {
+        Ok(()) => (scsi_status::GOOD, None),
+        Err(e) => {
+            log::error!("Write failed: {}", e);
+            let sense = crate::scsi::SenseData::medium_error();
+            (pdu::scsi_status::CHECK_CONDITION, Some(sense.to_bytes()))
+        }
+    };
+
+    // If this is the final data PDU, send a response and clean up
     if data_out.final_flag {
-        // Get device access for write
-        let mut device_guard = device.lock().map_err(|_| {
-            IscsiError::Scsi("Device lock poisoned".to_string())
-        })?;
-
-        // Parse LBA from the stored command (simplified - would need command tracking)
-        // For now, we'll use offset / block_size as a simple approximation
-        let block_size = device_guard.block_size();
-        let lba = (data_out.buffer_offset / block_size) as u64;
-
-        // Write the data
-        let write_result = device_guard.write(lba, &data_out.data, block_size);
-
-        drop(device_guard);
-
-        let (status, sense) = match write_result {
-            Ok(()) => (scsi_status::GOOD, None),
-            Err(_) => {
-                let sense = crate::scsi::SenseData::medium_error();
-                (pdu::scsi_status::CHECK_CONDITION, Some(sense.to_bytes()))
-            }
-        };
+        // Remove the pending write
+        session.pending_writes.remove(&data_out.itt);
 
         let response = IscsiPdu::scsi_response(
             data_out.itt,
@@ -395,6 +573,7 @@ fn handle_text_request(
     session: &mut IscsiSession,
     pdu: &IscsiPdu,
     target_name: &str,
+    target_address: &str,
 ) -> ScsiResult<Vec<IscsiPdu>> {
     let text_req = pdu.parse_text_request()?;
 
@@ -406,7 +585,7 @@ fn handle_text_request(
 
     let response_params = if is_send_targets && session.session_type == SessionType::Discovery {
         // Return target list
-        session.handle_send_targets(target_name, &format!("0.0.0.0:{}", ISCSI_PORT))
+        session.handle_send_targets(target_name, target_address)
     } else {
         // Echo back or handle other text parameters
         vec![]

@@ -5,6 +5,7 @@
 
 use crate::error::{IscsiError, ScsiResult};
 use crate::pdu::{self, IscsiPdu, LoginRequest, serialize_text_parameters};
+use std::collections::HashMap;
 
 /// Session state machine states (RFC 3720 Section 5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +111,7 @@ impl Default for SessionParams {
             data_sequence_in_order: true,
             error_recovery_level: 0,
             immediate_data: true,
-            initial_r2t: true,
+            initial_r2t: false,  // Allow immediate data without waiting for R2T
             header_digest: DigestType::None,
             data_digest: DigestType::None,
             target_name: String::new(),
@@ -119,6 +120,19 @@ impl Default for SessionParams {
             initiator_alias: String::new(),
         }
     }
+}
+
+/// Pending write command information
+#[derive(Debug, Clone)]
+pub struct PendingWrite {
+    /// Logical Block Address from the WRITE command
+    pub lba: u64,
+    /// Transfer length in blocks
+    pub transfer_length: u32,
+    /// Block size
+    pub block_size: u32,
+    /// Total bytes received so far
+    pub bytes_received: u32,
 }
 
 /// iSCSI Session
@@ -152,6 +166,10 @@ pub struct IscsiSession {
     current_stage: u8,
     /// Next login stage
     next_stage: u8,
+
+    // Command tracking
+    /// Pending write commands indexed by ITT (Initiator Task Tag)
+    pub pending_writes: HashMap<u32, PendingWrite>,
 }
 
 impl Default for IscsiSession {
@@ -175,6 +193,7 @@ impl IscsiSession {
             stat_sn: 0,
             current_stage: 0,
             next_stage: 0,
+            pending_writes: HashMap::new(),
         }
     }
 
@@ -300,22 +319,12 @@ impl IscsiSession {
     pub fn generate_response_params(&self) -> Vec<(String, String)> {
         let mut params = Vec::new();
 
-        // Session type confirmation
-        params.push((
-            "SessionType".to_string(),
-            if self.session_type == SessionType::Discovery {
-                "Discovery".to_string()
-            } else {
-                "Normal".to_string()
-            },
-        ));
-
-        // Target identification
-        if !self.params.target_name.is_empty() {
-            params.push(("TargetName".to_string(), self.params.target_name.clone()));
-        }
-        if !self.params.target_alias.is_empty() {
-            params.push(("TargetAlias".to_string(), self.params.target_alias.clone()));
+        // Note: SessionType and TargetName are declarative (initiator-only) and should NOT be echoed back
+        // Only send TargetAlias if configured
+        if self.session_type == SessionType::Normal {
+            if !self.params.target_alias.is_empty() {
+                params.push(("TargetAlias".to_string(), self.params.target_alias.clone()));
+            }
         }
 
         // Negotiated parameters
@@ -395,6 +404,7 @@ impl IscsiSession {
         }
 
         // Apply parameters from this login PDU
+        log::debug!("Received {} login parameters: {:?}", login.parameters.len(), login.parameters);
         for (key, value) in &login.parameters {
             self.apply_initiator_param(key, value);
         }
@@ -420,6 +430,8 @@ impl IscsiSession {
         self.current_stage = login.csg;
         self.next_stage = login.nsg;
 
+        log::debug!("Login: CSG={}, NSG={}, Transit={}", login.csg, login.nsg, login.transit);
+
         // Determine response
         let transit = login.transit;
         let (response_csg, response_nsg, response_transit) = if transit {
@@ -428,13 +440,25 @@ impl IscsiSession {
                 (0, 1) => {
                     // Security → Login Op Neg
                     self.state = SessionState::LoginOperationalNegotiation;
-                    (1, 3, true) // Skip to Full Feature
+                    (login.csg, login.nsg, true) // Echo back the transition
                 }
-                (0, 3) | (1, 3) => {
-                    // → Full Feature Phase
+                (0, 3) => {
+                    // Security → Full Feature Phase
                     self.state = SessionState::FullFeaturePhase;
-                    self.tsih = self.generate_tsih();
-                    (3, 3, true)
+                    // Only assign TSIH for Normal sessions, not Discovery
+                    if self.session_type == SessionType::Normal {
+                        self.tsih = self.generate_tsih();
+                    }
+                    (login.csg, login.nsg, true) // Echo back the transition
+                }
+                (1, 3) => {
+                    // Login Op Neg → Full Feature Phase
+                    self.state = SessionState::FullFeaturePhase;
+                    // Only assign TSIH for Normal sessions, not Discovery
+                    if self.session_type == SessionType::Normal {
+                        self.tsih = self.generate_tsih();
+                    }
+                    (login.csg, login.nsg, true) // Echo back the transition
                 }
                 _ => {
                     // Stay in current stage
@@ -446,19 +470,54 @@ impl IscsiSession {
             (login.csg, login.nsg, false)
         };
 
+        log::debug!("Response: CSG={}, NSG={}, Transit={}", response_csg, response_nsg, response_transit);
+
         // Generate response parameters
         let response_params = if response_transit && response_nsg == 3 {
-            // Final login response - include all negotiated params
-            self.generate_response_params()
+            // Final login response
+            if self.session_type == SessionType::Discovery {
+                // Discovery sessions - only echo back operational parameters
+                let mut params = vec![];
+
+                // Only include AuthMethod if we're in the Security Negotiation stage
+                if response_csg == 0 {
+                    params.push(("AuthMethod".to_string(), "None".to_string()));
+                }
+
+                // Include operational parameters that were negotiated
+                for (key, _value) in &login.parameters {
+                    match key.as_str() {
+                        "MaxRecvDataSegmentLength" => {
+                            params.push(("MaxRecvDataSegmentLength".to_string(),
+                                        self.params.max_recv_data_segment_length.to_string()));
+                        }
+                        "HeaderDigest" => {
+                            params.push(("HeaderDigest".to_string(), "None".to_string()));
+                        }
+                        "DataDigest" => {
+                            params.push(("DataDigest".to_string(), "None".to_string()));
+                        }
+                        _ => {}
+                    }
+                }
+                params
+            } else {
+                // Normal sessions get full parameter negotiation
+                self.generate_response_params()
+            }
         } else {
-            // Intermediate response
-            vec![
-                ("TargetName".to_string(), self.params.target_name.clone()),
-                ("AuthMethod".to_string(), "None".to_string()),
-            ]
+            // Intermediate response - only send AuthMethod during security negotiation
+            if response_csg == 0 {
+                vec![("AuthMethod".to_string(), "None".to_string())]
+            } else {
+                vec![]
+            }
         };
 
         let response_data = serialize_text_parameters(&response_params);
+
+        log::debug!("Sending {} response parameters: {:?}", response_params.len(), response_params);
+        log::debug!("Response data ({} bytes): {:?}", response_data.len(), String::from_utf8_lossy(&response_data));
 
         // Increment stat_sn for this response
         self.stat_sn = self.stat_sn.wrapping_add(1);
