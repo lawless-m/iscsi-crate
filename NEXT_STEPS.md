@@ -4,7 +4,7 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 
 ## Current State
 
-**Status:** Foundation complete, ready for protocol implementation
+**Status:** Phase 5 (Testing) - Ready for real-world initiator testing
 
 **What's Done:**
 - ✓ Project structure and Cargo.toml
@@ -14,82 +14,75 @@ This document provides a quick-start guide for resuming work on the iscsi-target
 - ✓ Example implementation
 - ✓ Documentation
 - ✓ Pushed to GitHub: https://github.com/lawless-m/iscsi-crate
+- ✓ **PDU parsing and serialization (Phase 1 complete)**
+- ✓ All PDU types implemented (Login, Text, SCSI, Data-In/Out, NOP, Logout)
+- ✓ **Session Management (Phase 2 complete)**
+- ✓ IscsiSession with login state machine
+- ✓ Parameter negotiation (all RFC 3720 parameters)
+- ✓ Sequence number tracking (CmdSN, StatSN)
+- ✓ **SCSI Command Handling (Phase 3 complete)**
+- ✓ All essential SCSI commands (INQUIRY, READ CAPACITY, READ/WRITE 10/16, etc.)
+- ✓ SCSI sense data generation for error reporting
+- ✓ **Target Server Implementation (Phase 4 complete)**
+- ✓ TCP listener on port 3260
+- ✓ Multi-threaded connection handling
+- ✓ Login and full feature phase handling
+- ✓ SCSI command processing with Data-In/Out
+- ✓ 51 unit tests passing
 
 **What's Next:**
-Implement the iSCSI protocol to make it actually work.
+Test with real iSCSI initiators (Phase 5) - Linux, Windows, ESXi.
 
 ## Where to Start
 
-### Quick Start: Phase 1 - PDU Parsing
+### Quick Start: Phase 5 - Testing with Real Initiators
 
-Start with `src/pdu.rs` - this is the foundation for everything else.
+The implementation is complete. Now test with real iSCSI initiators.
 
-**Goal:** Parse and serialize iSCSI Protocol Data Units (PDUs)
+**Goal:** Verify the target works with actual initiator software
 
-**File:** `/home/matt/Git/iscsi-crate/src/pdu.rs`
-
-**Steps:**
-
-1. Define the PDU structure:
+**Running the target:**
 ```rust
-pub struct IscsiPdu {
-    pub opcode: u8,
-    pub flags: u8,
-    pub ahs_length: u8,
-    pub data_length: u32,
-    pub lun: u64,
-    pub itt: u32,
-    pub fields: [u8; 28],  // Opcode-specific fields
-    pub data: Vec<u8>,
+use iscsi_target::{IscsiTarget, ScsiBlockDevice};
+
+fn main() {
+    // Create your storage device (implement ScsiBlockDevice)
+    let device = MyStorageDevice::new(1024 * 1024 * 100); // 100MB
+
+    // Build and run the target
+    let target = IscsiTarget::builder()
+        .bind_addr("0.0.0.0:3260")
+        .target_name("iqn.2025-12.local:storage.disk1")
+        .build(device)
+        .expect("Failed to create target");
+
+    target.run().expect("Target failed");
 }
 ```
 
-2. Implement parsing from bytes:
-```rust
-impl IscsiPdu {
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, IscsiError> {
-        // Parse 48-byte header
-        // Use byteorder crate for big-endian reads
-    }
-}
+**Testing with Linux:**
+```bash
+# Discover targets
+sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3260
+
+# Login to target
+sudo iscsiadm -m node -T iqn.2025-12.local:storage.disk1 -p 127.0.0.1:3260 --login
+
+# Check for new device (should appear as /dev/sdX)
+lsblk
+
+# Logout when done
+sudo iscsiadm -m node -T iqn.2025-12.local:storage.disk1 -p 127.0.0.1:3260 --logout
 ```
 
-3. Implement serialization to bytes:
-```rust
-impl IscsiPdu {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        // Serialize to 48-byte header + data
-    }
-}
+**Testing with Windows:**
+```powershell
+# Add target portal
+iscsicli AddTargetPortal 127.0.0.1 3260
+
+# Login to target
+iscsicli LoginTarget iqn.2025-12.local:storage.disk1 T 127.0.0.1 3260 * * * * * * * * * * * * 0
 ```
-
-4. Add unit tests for each PDU type
-
-**Reference:** See IMPLEMENTATION.md for PDU format details
-
-**Dependencies to add:**
-```toml
-[dependencies]
-byteorder = "1.5"  # Already added
-```
-
-### After PDU Parsing Works
-
-Continue in this order:
-
-1. **Session Management** (`src/session.rs`)
-   - Login phase state machine
-   - Parameter negotiation
-   - Session lifecycle
-
-2. **SCSI Commands** (`src/scsi.rs`)
-   - INQUIRY, READ CAPACITY, READ/WRITE 10
-   - Command parsing and response generation
-
-3. **Target Server** (`src/target.rs`)
-   - TCP listener implementation
-   - Connection handling
-   - Wire everything together
 
 ## Testing Approach
 
@@ -164,39 +157,45 @@ Open these files side-by-side:
 
 Follow this sequence to minimize dependencies:
 
-### Phase 1: PDU Layer (2-3 days)
-- [ ] `src/pdu.rs` - Basic PDU structure
-- [ ] Parse LOGIN_REQUEST
-- [ ] Serialize LOGIN_RESPONSE
-- [ ] Parse SCSI_COMMAND
-- [ ] Serialize SCSI_RESPONSE
-- [ ] Unit tests for each PDU type
+### Phase 1: PDU Layer ✓ COMPLETE
+- [x] `src/pdu.rs` - Basic PDU structure (48-byte BHS)
+- [x] Parse LOGIN_REQUEST
+- [x] Serialize LOGIN_RESPONSE
+- [x] Parse SCSI_COMMAND
+- [x] Serialize SCSI_RESPONSE
+- [x] Parse/Serialize TEXT, NOP, LOGOUT, DATA-IN/OUT PDUs
+- [x] Unit tests (14 tests passing)
 
-### Phase 2: Session Layer (3-4 days)
-- [ ] `src/session.rs` - Session structure
-- [ ] Login state machine
-- [ ] Parameter negotiation
-- [ ] Sequence number tracking
-- [ ] Session tests
+### Phase 2: Session Layer ✓ COMPLETE
+- [x] `src/session.rs` - Session structure (IscsiSession)
+- [x] Login state machine (SessionState enum)
+- [x] Parameter negotiation (all RFC 3720 params)
+- [x] Sequence number tracking (CmdSN, StatSN, ExpCmdSN)
+- [x] Session tests (14 tests, 28 total)
+- [x] Discovery session support
 
-### Phase 3: SCSI Layer (2-3 days)
-- [ ] `src/scsi.rs` - SCSI command handlers
-- [ ] INQUIRY command
-- [ ] READ CAPACITY 10
-- [ ] READ 10
-- [ ] WRITE 10
-- [ ] SCSI response generation
-- [ ] Command tests
+### Phase 3: SCSI Layer ✓ COMPLETE
+- [x] `src/scsi.rs` - SCSI command handlers
+- [x] INQUIRY command (standard + VPD pages)
+- [x] READ CAPACITY 10/16
+- [x] READ 10/16, WRITE 10/16
+- [x] MODE SENSE 6/10, REQUEST SENSE, REPORT LUNS
+- [x] SYNCHRONIZE CACHE, START STOP UNIT, VERIFY
+- [x] Sense data generation
+- [x] 18 tests (46 total)
 
-### Phase 4: Server Layer (3-5 days)
-- [ ] `src/target.rs` - Complete implementation
-- [ ] TCP listener
-- [ ] Connection handler
-- [ ] Login phase handling
-- [ ] Full feature phase handling
-- [ ] Integration tests
+### Phase 4: Server Layer ✓ COMPLETE
+- [x] `src/target.rs` - Complete implementation
+- [x] TCP listener on port 3260
+- [x] Connection handler (multi-threaded)
+- [x] Login phase handling
+- [x] Full feature phase handling
+- [x] SCSI command processing with Data-In/Out
+- [x] Task management support
+- [x] Graceful shutdown
+- [x] 5 tests (51 total)
 
-### Phase 5: Testing (5-7 days)
+### Phase 5: Testing (NEXT)
 - [ ] Test with Linux initiator
 - [ ] Test with Windows initiator
 - [ ] Fix compatibility issues

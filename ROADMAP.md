@@ -2,10 +2,11 @@
 
 This document outlines the implementation phases for completing the iscsi-target crate.
 
-## Current Status: Phase 0 - Foundation Complete ✓
+## Current Status: Phase 5 - Testing with Real Initiators (In Progress)
 
-The API structure, trait definitions, and project foundation are complete.
+The API structure, trait definitions, project foundation, PDU layer, session management, SCSI command handling, and target server implementation are complete.
 
+### Phase 0 - Foundation ✓
 - [x] ScsiBlockDevice trait definition
 - [x] IscsiTarget builder pattern API
 - [x] Error types and result handling
@@ -14,141 +15,68 @@ The API structure, trait definitions, and project foundation are complete.
 - [x] Project builds successfully
 - [x] Pushed to GitHub
 
-## Phase 1: Basic PDU Support
-
-Implement the core iSCSI PDU (Protocol Data Unit) parsing and serialization.
-
-**Goal:** Parse and generate basic iSCSI protocol messages
-
-**Files to implement:**
-- `src/pdu.rs` - PDU structure and parsing
-
-**Tasks:**
-- [ ] Define PDU header structure (48 bytes)
-- [ ] Implement BHS (Basic Header Segment) parsing
-- [ ] Implement AHS (Additional Header Segment) parsing
-- [ ] Add PDU serialization to bytes
-- [ ] Add PDU deserialization from bytes
-- [ ] Implement PDU validation
-- [ ] Add unit tests for PDU parsing
-
-**Key PDU Types to Support:**
-- Login Request/Response
-- Text Request/Response
-- SCSI Command/Response
-- SCSI Data-Out/Data-In
-- Logout Request/Response
-- NOP-Out/NOP-In
+### Phase 1 - PDU Support ✓
+- [x] Define PDU header structure (48 bytes BHS)
+- [x] Implement BHS (Basic Header Segment) parsing
+- [x] Add PDU serialization to bytes
+- [x] Add PDU deserialization from bytes
+- [x] Implement PDU validation
+- [x] Add unit tests for PDU parsing (14 tests passing)
+- [x] Login Request/Response PDUs
+- [x] Text Request/Response PDUs
+- [x] SCSI Command/Response PDUs
+- [x] SCSI Data-Out/Data-In PDUs
+- [x] Logout Request/Response PDUs
+- [x] NOP-Out/NOP-In PDUs
 
 **Reference:** RFC 3720 Section 10 (PDU formats)
 
-**Estimated Complexity:** Medium - Straightforward binary protocol parsing
-
-## Phase 2: Session Management
-
-Implement connection and session state management.
-
-**Goal:** Handle iSCSI login, negotiation, and session lifecycle
-
-**Files to implement:**
-- `src/session.rs` - Session and connection management
-
-**Tasks:**
-- [ ] Define Session structure
-- [ ] Define Connection structure
-- [ ] Implement login state machine
-- [ ] Handle parameter negotiation (MaxRecvDataSegmentLength, etc.)
-- [ ] Implement session authentication (none/CHAP)
-- [ ] Track command sequence numbers (CmdSN, StatSN)
-- [ ] Handle logout and session cleanup
-- [ ] Add session state tests
-
-**Key Concepts:**
-- Discovery session vs Normal session
-- Leading connection vs additional connections
-- Text negotiation key=value pairs
-- TSIH (Target Session Identifying Handle)
+### Phase 2 - Session Management ✓
+- [x] Define Session structure (IscsiSession)
+- [x] Define Connection structure (IscsiConnection)
+- [x] Implement login state machine (SessionState enum)
+- [x] Handle parameter negotiation (all RFC 3720 parameters)
+- [x] Implement session authentication (None, ready for CHAP)
+- [x] Track command sequence numbers (CmdSN, StatSN, ExpCmdSN)
+- [x] Handle logout and session cleanup
+- [x] Add session state tests (14 tests passing, 28 total)
+- [x] Discovery session support (SendTargets)
+- [x] Digest type negotiation (None/CRC32C)
 
 **Reference:** RFC 3720 Sections 5-7 (Session management)
 
-**Estimated Complexity:** Medium-High - State machine logic
+### Phase 3 - SCSI Command Handling ✓
+- [x] Parse SCSI CDB (Command Descriptor Block)
+- [x] Implement INQUIRY command handler (standard + VPD pages)
+- [x] Implement READ CAPACITY (10/16) handlers
+- [x] Implement TEST UNIT READY handler
+- [x] Implement READ (10/16) handlers
+- [x] Implement WRITE (10/16) handlers
+- [x] Implement VERIFY command
+- [x] Implement MODE SENSE (6/10) handlers
+- [x] Implement REQUEST SENSE handler
+- [x] Implement REPORT LUNS handler
+- [x] Implement SYNCHRONIZE CACHE handler
+- [x] Implement START STOP UNIT handler
+- [x] Generate SCSI response with proper status codes
+- [x] Handle SCSI sense data for errors
+- [x] Add command handler tests (18 tests, 46 total)
 
-## Phase 3: SCSI Command Handling
+**Reference:** SCSI Block Commands (SBC-4) specification
 
-Implement SCSI command processing and response generation.
-
-**Goal:** Handle SCSI commands and translate to ScsiBlockDevice calls
-
-**Files to implement:**
-- Enhance `src/scsi.rs` with command handlers
-
-**Tasks:**
-- [ ] Parse SCSI CDB (Command Descriptor Block)
-- [ ] Implement INQUIRY command handler
-- [ ] Implement READ CAPACITY (10/16) handlers
-- [ ] Implement TEST UNIT READY handler
-- [ ] Implement READ (10/16) handlers
-- [ ] Implement WRITE (10/16) handlers
-- [ ] Implement VERIFY command
-- [ ] Generate SCSI response PDUs
-- [ ] Handle SCSI sense data for errors
-- [ ] Add command handler tests
-
-**SCSI Commands Priority:**
-1. INQUIRY - Device identification
-2. READ CAPACITY - Get device size
-3. TEST UNIT READY - Check device ready
-4. READ 10/16 - Read data
-5. WRITE 10/16 - Write data
-6. VERIFY - Verify written data
-
-**Reference:** 
-- RFC 3720 Section 10.3 (SCSI Command)
-- SCSI Block Commands (SBC-4) specification
-
-**Estimated Complexity:** Medium - Well-defined command formats
-
-## Phase 4: Target Server Implementation
-
-Wire everything together into a working TCP server.
-
-**Goal:** Complete end-to-end iSCSI target server
-
-**Files to implement:**
-- Complete `src/target.rs` implementation
-
-**Tasks:**
-- [ ] Implement TCP listener on port 3260
-- [ ] Handle incoming connections
-- [ ] Implement login phase
-- [ ] Implement full feature phase
-- [ ] Process commands in sequence
-- [ ] Handle multiple concurrent connections
-- [ ] Implement proper shutdown
-- [ ] Add integration tests
-- [ ] Test with real iSCSI initiators (Linux, Windows)
-
-**Architecture:**
-```
-TcpListener (0.0.0.0:3260)
-    ↓
-Accept connection
-    ↓
-Login Phase (Session creation)
-    ↓
-Full Feature Phase (Command processing)
-    ↓
-    ├─→ Read PDU
-    ├─→ Parse PDU
-    ├─→ Handle SCSI command
-    ├─→ Call ScsiBlockDevice
-    ├─→ Generate response PDU
-    └─→ Send response
-```
+### Phase 4 - Target Server Implementation ✓
+- [x] Implement TCP listener on port 3260
+- [x] Handle incoming connections (multi-threaded)
+- [x] Implement PDU read/write over TCP stream
+- [x] Implement login phase handling
+- [x] Implement full feature phase handling
+- [x] Process SCSI commands with Data-In/Out support
+- [x] Handle multiple concurrent connections
+- [x] Implement graceful shutdown
+- [x] Add target builder with configuration options
+- [x] Add target server tests (5 tests, 51 total)
 
 **Reference:** RFC 3720 Section 8 (State transitions)
-
-**Estimated Complexity:** High - Integration and concurrency
 
 ## Phase 5: Testing and Hardening
 

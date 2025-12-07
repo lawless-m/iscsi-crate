@@ -102,20 +102,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\niSCSI target configured:");
     println!("  Target name: iqn.2025-12.local:storage.memory-disk");
     println!("  Listen address: 0.0.0.0:3260");
-    println!("\nNOTE: This is a skeleton - iSCSI protocol implementation pending");
-    println!("See RFC 3720: https://datatracker.ietf.org/doc/html/rfc3720\n");
+    println!("\nTo connect from Linux:");
+    println!("  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3260");
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3260 --login");
+    println!("\nTo disconnect:");
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3260 --logout");
+    println!("\nStarting iSCSI target server...\n");
 
-    // Run the target (currently returns error as implementation is pending)
+    // Run the target
     match target.run() {
         Ok(_) => {
-            println!("Target stopped");
+            println!("Target stopped gracefully");
             Ok(())
         }
         Err(e) => {
             eprintln!("Target error: {}", e);
-            println!("\nThis crate provides the API structure for an iSCSI target.");
-            println!("The actual protocol implementation is left as future work.");
-            Ok(())
+            Err(e.into())
         }
     }
 }
