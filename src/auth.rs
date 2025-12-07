@@ -156,7 +156,9 @@ impl ChapAuthState {
 
 /// Parse CHAP response from hex string
 pub fn parse_chap_response(hex_str: &str) -> ScsiResult<Vec<u8>> {
-    hex::decode(hex_str).map_err(|e| {
+    // Strip "0x" prefix if present
+    let cleaned = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    hex::decode(cleaned).map_err(|e| {
         IscsiError::Auth(format!("Invalid CHAP response hex: {}", e))
     })
 }

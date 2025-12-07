@@ -179,6 +179,8 @@ pub struct IscsiSession {
     pub chap_state: Option<ChapAuthState>,
     /// CHAP authentication state for target-to-initiator (if using Mutual CHAP)
     pub target_chap_state: Option<ChapAuthState>,
+    /// Whether CHAP authentication has completed successfully (used to distinguish "never started" from "completed")
+    pub chap_completed: bool,
 }
 
 impl Default for IscsiSession {
@@ -206,6 +208,7 @@ impl IscsiSession {
             auth_config: AuthConfig::None,
             chap_state: None,
             target_chap_state: None,
+            chap_completed: false,
         }
     }
 
@@ -269,6 +272,14 @@ impl IscsiSession {
             }
             AuthConfig::Chap { credentials } | AuthConfig::MutualChap { target_credentials: credentials, .. } => {
                 // CHAP is required
+
+                // Handle empty transit request after CHAP completes (Mutual CHAP only)
+                // RFC 3720: After Mutual CHAP, initiator sends empty request with Transit=true
+                if self.chap_completed && login_params.is_empty() {
+                    log::debug!("CHAP already completed, allowing empty transit request for phase transition");
+                    return Ok((true, vec![]));
+                }
+
                 // Check if initiator has selected an algorithm
                 let chap_a = login_params.iter()
                     .find(|(k, _)| k == "CHAP_A")
@@ -325,7 +336,7 @@ impl IscsiSession {
                                 log::info!("CHAP authentication successful for user '{}'", username);
 
                                 // Check if mutual CHAP is required
-                                if let AuthConfig::MutualChap { target_credentials, .. } = &self.auth_config {
+                                if let AuthConfig::MutualChap { initiator_credentials, .. } = &self.auth_config {
                                     // In mutual CHAP, initiator may send a challenge to target
                                     // Check if initiator sent CHAP_I and CHAP_C (target auth)
                                     let target_chap_i = login_params.iter()
@@ -336,7 +347,8 @@ impl IscsiSession {
                                         .map(|(_, v)| v.as_str());
 
                                     if let (Some(chap_i), Some(chap_c_hex)) = (target_chap_i, target_chap_c) {
-                                        // Initiator is challenging us - respond with target's credentials
+                                        // Initiator is challenging us - respond with initiator's credentials
+                                        // (target proves its identity using credentials the initiator expects)
                                         log::debug!("Mutual CHAP: Received challenge from initiator (I={}, C={})", chap_i, &chap_c_hex[..20.min(chap_c_hex.len())]);
 
                                         // Parse challenge
@@ -348,27 +360,37 @@ impl IscsiSession {
                                         let challenge = hex::decode(chap_c_clean).map_err(|e|
                                             IscsiError::Auth(format!("Invalid CHAP_C hex: {}", e)))?;
 
-                                        // Calculate target's response
+                                        // Calculate target's response using initiator_credentials
+                                        // (these are the credentials the initiator expects from the target)
                                         let mut data = Vec::new();
                                         data.push(identifier);
-                                        data.extend_from_slice(target_credentials.secret.as_bytes());
+                                        data.extend_from_slice(initiator_credentials.secret.as_bytes());
                                         data.extend_from_slice(&challenge);
                                         let target_response = md5::compute(&data).0.to_vec();
 
-                                        let response_hex = target_response.iter()
+                                        let response_hex = format!("0x{}", target_response.iter()
                                             .map(|b| format!("{:02x}", b))
-                                            .collect::<String>();
+                                            .collect::<String>());
 
                                         let params = vec![
-                                            ("CHAP_N".to_string(), target_credentials.username.clone()),
+                                            ("CHAP_N".to_string(), initiator_credentials.username.clone()),
                                             ("CHAP_R".to_string(), response_hex),
                                         ];
 
                                         log::info!("Mutual CHAP: Both parties authenticated successfully");
+
+                                        // Clear CHAP state to indicate authentication is complete
+                                        // The next login request will not have CHAP parameters
+                                        self.chap_state = None;
+                                        self.chap_completed = true;
+
                                         return Ok((true, params)); // Send target's response and complete auth
                                     }
                                 }
 
+                                // Clear CHAP state after successful one-way CHAP
+                                self.chap_state = None;
+                                self.chap_completed = true;
                                 Ok((true, vec![])) // Authenticated successfully (one-way CHAP)
                             } else {
                                 log::warn!("CHAP authentication failed: invalid response for user '{}'", username);
@@ -609,14 +631,23 @@ impl IscsiSession {
         let auth_complete = if login.csg == 0 {
             let (auth_success, auth_params) = self.handle_chap_auth(&login.parameters)?;
 
+            log::debug!("After handle_chap_auth: auth_success={}, auth_params={:?}", auth_success, auth_params);
+
             // If authentication in progress, send CHAP parameters and stay in security negotiation
-            if !auth_success && !auth_params.is_empty() {
-                // Send CHAP challenge and stay in security negotiation
+            // OR if mutual CHAP completed successfully and we need to send target's response
+            if !auth_params.is_empty() {
+                // Send CHAP challenge/response
                 let response_data = serialize_text_parameters(&auth_params);
 
                 log::debug!("Sending {} auth parameters: {:?}", auth_params.len(), auth_params);
 
                 self.stat_sn = self.stat_sn.wrapping_add(1);
+
+                // For mutual CHAP, DO NOT set transit bit even if initiator sets it
+                // RFC 3720: Mutual CHAP requires the target to send its response
+                // WITHOUT transitioning, then the initiator will send another login
+                // request to complete the phase transition
+                let (csg, nsg, transit) = (0, 0, false);
 
                 return Ok(IscsiPdu::login_response(
                     self.isid,
@@ -626,16 +657,16 @@ impl IscsiSession {
                     self.max_cmd_sn,
                     0, // status_class: success
                     0, // status_detail: success
-                    0, // CSG: Security Negotiation
-                    0, // NSG: stay in Security Negotiation (will receive CHAP response next)
-                    false, // transit: stay in security negotiation
+                    csg, // CSG: Security Negotiation
+                    nsg, // NSG: depends on whether auth is complete
+                    transit, // transit: depends on whether auth is complete
                     pdu.itt,
                     response_data,
                 ));
             }
 
             // If authentication required but failed with error, reject the login
-            if !auth_success && auth_params.is_empty() {
+            if !auth_success {
                 return self.create_login_reject(
                     pdu.itt,
                     0x02, // INITIATOR_ERROR
