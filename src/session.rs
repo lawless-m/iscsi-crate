@@ -3,6 +3,7 @@
 //! This module handles session state, connection management, and parameter negotiation
 //! based on RFC 3720: https://datatracker.ietf.org/doc/html/rfc3720
 
+use crate::auth::{AuthConfig, ChapAuthState};
 use crate::error::{IscsiError, ScsiResult};
 use crate::pdu::{self, IscsiPdu, LoginRequest, serialize_text_parameters};
 use std::collections::HashMap;
@@ -170,6 +171,12 @@ pub struct IscsiSession {
     // Command tracking
     /// Pending write commands indexed by ITT (Initiator Task Tag)
     pub pending_writes: HashMap<u32, PendingWrite>,
+
+    // Authentication
+    /// Authentication configuration for this session
+    pub auth_config: AuthConfig,
+    /// CHAP authentication state (if using CHAP)
+    pub chap_state: Option<ChapAuthState>,
 }
 
 impl Default for IscsiSession {
@@ -194,6 +201,8 @@ impl IscsiSession {
             current_stage: 0,
             next_stage: 0,
             pending_writes: HashMap::new(),
+            auth_config: AuthConfig::None,
+            chap_state: None,
         }
     }
 
@@ -222,6 +231,123 @@ impl IscsiSession {
         };
 
         session
+    }
+
+    /// Set authentication configuration for this session
+    pub fn set_auth_config(&mut self, auth_config: AuthConfig) {
+        self.auth_config = auth_config;
+    }
+
+    /// Handle CHAP authentication during security negotiation
+    /// Returns (success, response_params)
+    fn handle_chap_auth(&mut self, login_params: &[(String, String)]) -> ScsiResult<(bool, Vec<(String, String)>)> {
+        use crate::auth::parse_chap_response;
+
+        // Check if initiator requested CHAP (may be "CHAP" or "CHAP,None" etc.)
+        log::debug!("handle_chap_auth called with {} parameters", login_params.len());
+        for (k, v) in login_params.iter() {
+            log::debug!("  Login param: {}={}", k, v);
+        }
+
+        let auth_method = login_params.iter()
+            .find(|(k, _)| k == "AuthMethod")
+            .map(|(_, v)| v.as_str());
+
+        log::debug!("AuthMethod parameter: {:?}", auth_method);
+
+        // Check if CHAP is in the list of methods
+        let supports_chap = auth_method.map(|m| m.contains("CHAP")).unwrap_or(false);
+        log::debug!("supports_chap: {}", supports_chap);
+
+        match &self.auth_config {
+            AuthConfig::None => {
+                // No auth required - accept None or CHAP
+                Ok((true, vec![("AuthMethod".to_string(), "None".to_string())]))
+            }
+            AuthConfig::Chap { credentials } | AuthConfig::MutualChap { target_credentials: credentials, .. } => {
+                // CHAP is required
+                // Check if initiator has selected an algorithm
+                let chap_a = login_params.iter()
+                    .find(|(k, _)| k == "CHAP_A")
+                    .map(|(_, v)| v.as_str());
+
+                // Allow CHAP continuation even if AuthMethod is not in current PDU
+                // (only the first Login PDU contains AuthMethod)
+                let chap_in_progress = self.chap_state.is_some() || chap_a.is_some();
+
+                if supports_chap || chap_in_progress {
+                    if chap_a.is_none() && self.chap_state.is_none() {
+                        // Step 1: Acknowledge CHAP (initiator will request algorithm list next)
+                        let params = vec![
+                            ("TargetPortalGroupTag".to_string(), "1".to_string()),
+                            ("AuthMethod".to_string(), "CHAP".to_string()),
+                        ];
+                        log::debug!("Acknowledging CHAP authentication method");
+                        Ok((false, params))
+                    } else if chap_a.is_some() && self.chap_state.is_none() {
+                        // Step 2: Initiator requested algorithm (sends CHAP_A=5), send challenge
+                        let chap_state = ChapAuthState::new(false);
+                        let params = vec![
+                            ("CHAP_A".to_string(), "5".to_string()), // Confirm MD5
+                            ("CHAP_I".to_string(), chap_state.identifier_str()),
+                            ("CHAP_C".to_string(), chap_state.challenge_hex()),
+                        ];
+
+                        // For mutual CHAP, we'll handle target auth after validating initiator
+                        self.chap_state = Some(chap_state);
+
+                        log::debug!("Sending CHAP challenge to initiator");
+                        Ok((false, params)) // Not authenticated yet
+                    } else if self.chap_state.is_some() {
+                        // Second step: Validate initiator response
+                        let chap_n = login_params.iter()
+                            .find(|(k, _)| k == "CHAP_N")
+                            .map(|(_, v)| v.as_str());
+                        let chap_r = login_params.iter()
+                            .find(|(k, _)| k == "CHAP_R")
+                            .map(|(_, v)| v.as_str());
+
+                        if let (Some(username), Some(response_hex)) = (chap_n, chap_r) {
+                            // Validate username
+                            if username != credentials.username {
+                                log::warn!("CHAP authentication failed: unknown user '{}'", username);
+                                return Err(IscsiError::Auth(format!("Unknown user: {}", username)));
+                            }
+
+                            // Parse and validate response
+                            let response = parse_chap_response(response_hex)?;
+                            let chap_state = self.chap_state.as_ref().unwrap();
+
+                            if chap_state.validate_response(&response, &credentials.secret) {
+                                log::info!("CHAP authentication successful for user '{}'", username);
+
+                                // Check if mutual CHAP is required
+                                if let AuthConfig::MutualChap { .. } = &self.auth_config {
+                                    // TODO: Implement mutual CHAP (target authenticating to initiator)
+                                    log::debug!("Mutual CHAP not yet implemented");
+                                }
+
+                                Ok((true, vec![])) // Authenticated successfully
+                            } else {
+                                log::warn!("CHAP authentication failed: invalid response for user '{}'", username);
+                                Err(IscsiError::Auth("Invalid CHAP response".to_string()))
+                            }
+                        } else {
+                            log::warn!("CHAP authentication failed: missing CHAP_N or CHAP_R");
+                            Err(IscsiError::Auth("Missing CHAP credentials".to_string()))
+                        }
+                    } else {
+                        // Unexpected state
+                        log::warn!("CHAP authentication: unexpected state");
+                        Err(IscsiError::Auth("CHAP authentication protocol error".to_string()))
+                    }
+                } else {
+                    // Initiator must use CHAP but didn't request it
+                    log::warn!("Authentication required but initiator didn't request CHAP");
+                    Err(IscsiError::Auth("CHAP authentication required".to_string()))
+                }
+            }
+        }
     }
 
     /// Apply an initiator parameter during negotiation
@@ -307,6 +433,10 @@ impl IscsiSession {
                 } else {
                     DigestType::None
                 };
+            }
+            // Authentication parameters - handled separately in handle_chap_auth()
+            "AuthMethod" | "CHAP_A" | "CHAP_I" | "CHAP_C" | "CHAP_N" | "CHAP_R" => {
+                // These are processed by handle_chap_auth, not here
             }
             _ => {
                 // Unknown parameter - ignore
@@ -432,10 +562,57 @@ impl IscsiSession {
 
         log::debug!("Login: CSG={}, NSG={}, Transit={}", login.csg, login.nsg, login.transit);
 
-        // Determine response
-        let transit = login.transit;
+        // Handle authentication during security negotiation (CSG=0)
+        // IMPORTANT: Check auth BEFORE deciding whether to honor transit request
+        let auth_complete = if login.csg == 0 {
+            let (auth_success, auth_params) = self.handle_chap_auth(&login.parameters)?;
+
+            // If authentication in progress, send CHAP parameters and stay in security negotiation
+            if !auth_success && !auth_params.is_empty() {
+                // Send CHAP challenge and stay in security negotiation
+                let response_data = serialize_text_parameters(&auth_params);
+
+                log::debug!("Sending {} auth parameters: {:?}", auth_params.len(), auth_params);
+
+                self.stat_sn = self.stat_sn.wrapping_add(1);
+
+                return Ok(IscsiPdu::login_response(
+                    self.isid,
+                    self.tsih,
+                    self.stat_sn,
+                    self.exp_cmd_sn,
+                    self.max_cmd_sn,
+                    0, // status_class: success
+                    0, // status_detail: success
+                    0, // CSG: Security Negotiation
+                    0, // NSG: stay in Security Negotiation (will receive CHAP response next)
+                    false, // transit: stay in security negotiation
+                    pdu.itt,
+                    response_data,
+                ));
+            }
+
+            // If authentication required but failed with error, reject the login
+            if !auth_success && auth_params.is_empty() {
+                return self.create_login_reject(
+                    pdu.itt,
+                    0x02, // INITIATOR_ERROR
+                    0x01, // Authentication failure
+                );
+            }
+
+            // Authentication successful
+            auth_success
+        } else {
+            // Not in security negotiation, auth not required
+            true
+        };
+
+        // Determine response transit flags
+        // Only allow transit if authentication is complete (or not required)
+        let transit = login.transit && auth_complete;
         let (response_csg, response_nsg, response_transit) = if transit {
-            // Initiator wants to transition
+            // Initiator wants to transition and auth is complete
             match (login.csg, login.nsg) {
                 (0, 1) => {
                     // Security → Login Op Neg
@@ -466,7 +643,7 @@ impl IscsiSession {
                 }
             }
         } else {
-            // Initiator not ready to transition
+            // Initiator not ready to transition, or auth not complete
             (login.csg, login.nsg, false)
         };
 
@@ -478,11 +655,6 @@ impl IscsiSession {
             if self.session_type == SessionType::Discovery {
                 // Discovery sessions - only echo back operational parameters
                 let mut params = vec![];
-
-                // Only include AuthMethod if we're in the Security Negotiation stage
-                if response_csg == 0 {
-                    params.push(("AuthMethod".to_string(), "None".to_string()));
-                }
 
                 // Include operational parameters that were negotiated
                 for (key, _value) in &login.parameters {
@@ -506,12 +678,8 @@ impl IscsiSession {
                 self.generate_response_params()
             }
         } else {
-            // Intermediate response - only send AuthMethod during security negotiation
-            if response_csg == 0 {
-                vec![("AuthMethod".to_string(), "None".to_string())]
-            } else {
-                vec![]
-            }
+            // Intermediate response
+            vec![]
         };
 
         let response_data = serialize_text_parameters(&response_params);

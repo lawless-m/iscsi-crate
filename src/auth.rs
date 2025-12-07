@@ -143,8 +143,9 @@ impl ChapAuthState {
     }
 
     /// Convert challenge to hex string for text parameter
+    /// RFC 3720 requires the "0x" prefix for CHAP_C
     pub fn challenge_hex(&self) -> String {
-        hex::encode(&self.challenge)
+        format!("0x{}", hex::encode(&self.challenge))
     }
 
     /// Convert identifier to string
