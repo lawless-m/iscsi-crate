@@ -46,12 +46,14 @@
 //! # }
 //! ```
 
+pub mod auth;
 pub mod error;
 pub mod pdu;
 pub mod scsi;
 pub mod session;
 pub mod target;
 
+pub use auth::{AuthConfig, ChapCredentials};
 pub use error::{IscsiError, ScsiResult};
 pub use scsi::ScsiBlockDevice;
 pub use target::{IscsiTarget, IscsiTargetBuilder};

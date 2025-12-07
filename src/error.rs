@@ -22,6 +22,9 @@ pub enum IscsiError {
 
     #[error("Configuration error: {0}")]
     Config(String),
+
+    #[error("Authentication error: {0}")]
+    Auth(String),
 }
 
 /// Result type for SCSI operations
