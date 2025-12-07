@@ -36,14 +36,16 @@ The API structure, trait definitions, project foundation, PDU layer, session man
 - [x] Define Connection structure (IscsiConnection)
 - [x] Implement login state machine (SessionState enum)
 - [x] Handle parameter negotiation (all RFC 3720 parameters)
-- [x] Implement session authentication (None, ready for CHAP)
+- [x] Implement session authentication (None, CHAP, Mutual CHAP)
 - [x] Track command sequence numbers (CmdSN, StatSN, ExpCmdSN)
 - [x] Handle logout and session cleanup
 - [x] Add session state tests (14 tests passing, 28 total)
 - [x] Discovery session support (SendTargets)
 - [x] Digest type negotiation (None/CRC32C)
+- [x] CHAP authentication (one-way)
+- [x] Mutual CHAP authentication (two-way)
 
-**Reference:** RFC 3720 Sections 5-7 (Session management)
+**Reference:** RFC 3720 Sections 5-7 (Session management), Section 8.2 (CHAP)
 
 ### Phase 3 - SCSI Command Handling ✓
 - [x] Parse SCSI CDB (Command Descriptor Block)
@@ -110,9 +112,9 @@ Test with real-world initiators and fix issues.
 Optional features for enhanced functionality.
 
 **Tasks:**
-- [ ] CHAP authentication
+- [x] CHAP authentication (one-way and mutual)
 - [ ] Multiple LUNs per target
-- [ ] Discovery sessions (SendTargets)
+- [x] Discovery sessions (SendTargets)
 - [ ] Error recovery levels
 - [ ] Persistent reservations
 - [ ] Thin provisioning support
