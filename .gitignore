@@ -19,3 +19,9 @@ Cargo.lock
 # OS files
 .DS_Store
 Thumbs.db
+
+# iSCSI test suite build artifacts
+iscsi-test-suite/obj/
+iscsi-test-suite/iscsi-test-suite
+iscsi-test-suite/simple_test
+iscsi-test-suite/reports/*.txt
