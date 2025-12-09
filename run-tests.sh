@@ -80,32 +80,33 @@ if [ ! -f "$TEST_CMD" ]; then
     exit 2
 fi
 
-# Start the target in background if not already running
-if ! nc -z 127.0.0.1 3261 2>/dev/null; then
-    echo "Starting iSCSI target..."
-    cargo run --example simple_target > /tmp/simple_target.log 2>&1 &
-    TARGET_PID=$!
+# Kill any existing target to ensure fresh start with latest code
+echo "Stopping any existing iSCSI target..."
+pkill -f simple_target 2>/dev/null || true
+# Give it a moment to release the port
+sleep 0.5
 
-    # Wait for target to be ready (max 30 seconds)
-    for i in {1..300}; do
-        if nc -z 127.0.0.1 3261 2>/dev/null; then
-            echo "Target is ready"
-            break
-        fi
-        sleep 0.1
-    done
+# Start the target in background
+echo "Starting iSCSI target with latest code..."
+cargo run --example simple_target > /tmp/simple_target.log 2>&1 &
+TARGET_PID=$!
 
-    # Check if target is now listening
-    if ! nc -z 127.0.0.1 3261 2>/dev/null; then
-        echo -e "${YELLOW}WARNING: iSCSI target failed to start or is not listening on port 3261${NC}"
-        echo "Target log:"
-        tail -50 /tmp/simple_target.log
-        kill $TARGET_PID 2>/dev/null || true
-        exit 1
+# Wait for target to be ready (max 30 seconds)
+for i in {1..300}; do
+    if nc -z 127.0.0.1 3261 2>/dev/null; then
+        echo "Target is ready"
+        break
     fi
-else
-    echo "Target is already running on port 3261"
-    TARGET_PID=""
+    sleep 0.1
+done
+
+# Check if target is now listening
+if ! nc -z 127.0.0.1 3261 2>/dev/null; then
+    echo -e "${YELLOW}WARNING: iSCSI target failed to start or is not listening on port 3261${NC}"
+    echo "Target log:"
+    tail -50 /tmp/simple_target.log
+    kill $TARGET_PID 2>/dev/null || true
+    exit 1
 fi
 echo
 
