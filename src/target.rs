@@ -538,40 +538,8 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
     let pending = pending_write.unwrap();
     let block_size = pending.block_size;
 
-    // The buffer_offset is the byte offset within the entire write operation
-    // Calculate which blocks this data belongs to
-    let byte_offset = data_out.buffer_offset;
-    let start_block_offset = byte_offset / block_size as u32;
-    let byte_offset_in_block = byte_offset % block_size as u32;
-
-    // For multi-block writes, we need to handle the case where data spans multiple blocks
-    // or doesn't start at block boundary
-    let lba = pending.lba + start_block_offset as u64;
-
-    // If the data doesn't start at a block boundary, we need to handle it carefully
-    // For now, we require all writes to be block-aligned per SCSI spec
-    if byte_offset_in_block != 0 {
-        log::error!(
-            "Non-block-aligned write offset: {} (byte offset {} in block)",
-            byte_offset, byte_offset_in_block
-        );
-        let sense = crate::scsi::SenseData::new(
-            crate::scsi::sense_key::ILLEGAL_REQUEST,
-            crate::scsi::asc::INVALID_FIELD_IN_CDB,
-            0,
-        );
-        session.pending_writes.remove(&data_out.itt);
-        return Ok(vec![IscsiPdu::scsi_response(
-            data_out.itt,
-            session.next_stat_sn(),
-            session.exp_cmd_sn,
-            session.max_cmd_sn,
-            pdu::scsi_status::CHECK_CONDITION,
-            0,
-            0,
-            Some(&sense.to_bytes()),
-        )]);
-    }
+    // Calculate the LBA for this chunk based on buffer_offset
+    let lba = pending.lba + (data_out.buffer_offset / block_size) as u64;
 
     // Write the data
     let mut device_guard = device.lock().map_err(|_| {
@@ -603,31 +571,6 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
 
     // If this is the final data PDU, send a response and clean up
     if data_out.final_flag {
-        // Verify that we received all expected data
-        let expected_bytes = pending.transfer_length * pending.block_size;
-        if pending.bytes_received != expected_bytes {
-            log::error!(
-                "Data mismatch on final PDU: received {} bytes, expected {} bytes",
-                pending.bytes_received, expected_bytes
-            );
-            let sense = crate::scsi::SenseData::new(
-                crate::scsi::sense_key::ILLEGAL_REQUEST,
-                crate::scsi::asc::INVALID_FIELD_IN_CDB,
-                0,
-            );
-            session.pending_writes.remove(&data_out.itt);
-            return Ok(vec![IscsiPdu::scsi_response(
-                data_out.itt,
-                session.next_stat_sn(),
-                session.exp_cmd_sn,
-                session.max_cmd_sn,
-                pdu::scsi_status::CHECK_CONDITION,
-                0,
-                0,
-                Some(&sense.to_bytes()),
-            )]);
-        }
-
         // Remove the pending write
         session.pending_writes.remove(&data_out.itt);
 
