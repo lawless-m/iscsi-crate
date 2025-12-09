@@ -1,0 +1,61 @@
+Failed to create report file: reports/test_report_20251209_172839.txt
+
+iSCSI Target Test Suite
+=======================
+Target: 127.0.0.1:3262
+IQN: iqn.2025-12.local:storage.chap-disk
+LUN: 0
+
+
+[Discovery Tests]
+  TD-001: Basic Discovery                          [[32mPASS[0m]  (0.085s)
+  TD-002: Discovery With Authentication            [[33mSKIP[0m]  (0.000s)
+    └─ Discovery auth test not fully implemented
+  TD-003: Discovery Without Credentials            [[33mSKIP[0m]  (0.000s)
+    └─ Requires auth-mandatory target
+  TD-004: Target Redirection                       [[33mSKIP[0m]  (0.000s)
+    └─ Requires redirection-capable target
+
+[Login/Logout Tests]
+  TL-001: Basic Login                              [[32mPASS[0m]  (0.100s)
+  TL-002: Parameter Negotiation                    [[32mPASS[0m]  (0.100s)
+  TL-003: Invalid Parameter Values                 [[33mSKIP[0m]  (0.000s)
+    └─ Requires low-level PDU manipulation
+  TL-004: Multiple Login Attempts                  [[32mPASS[0m]  (0.300s)
+  TL-005: Login Timeout                            [[32mPASS[0m]  (20.002s)
+    └─ Target maintained connection (may have long timeout)
+  TL-006: Simultaneous Logins                      [[32mPASS[0m]  (0.026s)
+    └─ All concurrent logins succeeded - target supports simultaneous connections
+
+[SCSI Command Tests]
+  TC-001: INQUIRY Command                          [[32mPASS[0m]  (0.100s)
+  TC-002: TEST UNIT READY                          [[32mPASS[0m]  (0.100s)
+  TC-003: READ CAPACITY (10)                       [[32mPASS[0m]  (0.100s)
+  TC-004: READ CAPACITY (16)                       [[32mPASS[0m]  (0.100s)
+  TC-005: MODE SENSE                               [[32mPASS[0m]  (0.100s)
+  TC-006: REQUEST SENSE                            [[33mSKIP[0m]  (0.000s)
+    └─ REQUEST SENSE handled automatically by libiscsi
+  TC-007: REPORT LUNS                              [[32mPASS[0m]  (0.100s)
+  TC-008: Invalid Command                          [[31mFAIL[0m]  (0.100s)
+    └─ Expected ILLEGAL REQUEST sense key for invalid command
+  TC-009: Command to Invalid LUN                   [[32mPASS[0m]  (0.100s)
+
+[I/O Operation Tests]
+  TI-001: Single Block Read                        [[32mPASS[0m]  (0.100s)
+  TI-002: Single Block Write                       [[32mPASS[0m]  (0.100s)
+  TI-003: Multi-Block Sequential Read              [[32mPASS[0m]  (0.100s)
+  TI-004: Multi-Block Sequential Write             [[32mPASS[0m]  (0.101s)
+  TI-005: Random Access Reads                      [[32mPASS[0m]  (0.100s)
+  TI-006: Random Access Writes                     [[32mPASS[0m]  (0.100s)
+  TI-007: Large Transfer Read                      [[32mPASS[0m]  (0.101s)
+  TI-008: Large Transfer Write                     [[32mPASS[0m]  (0.100s)
+  TI-009: Zero-Length Transfer                     [[32mPASS[0m]  (0.099s)
+  TI-010: Maximum Transfer Size                    [[32mPASS[0m]  (0.103s)
+  TI-011: Beyond Maximum Transfer                  [[32mPASS[0m]  (0.107s)
+  TI-012: Unaligned Access                         [[32mPASS[0m]  (0.091s)
+  TI-013: Write-Read-Verify Pattern                [[32mPASS[0m]  (0.100s)
+  TI-014: Overwrite Test                           [[32mPASS[0m]  (0.100s)
+
+=======================
+Results: 27 passed, 1 failed, 5 skipped, 0 errors
+Duration: 22.8 seconds

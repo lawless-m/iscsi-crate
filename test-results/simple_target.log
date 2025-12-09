@@ -1,0 +1,19 @@
+   Compiling iscsi-target v0.1.0 (/home/matt/Git/iscsi-crate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running `target/debug/examples/simple_target`
+Creating iSCSI target with 100 MB in-memory storage
+Capacity: 204800 blocks of 512 bytes
+
+iSCSI target configured:
+  Target name: iqn.2025-12.local:storage.memory-disk
+  Listen address: 0.0.0.0:3261
+
+To connect from Linux:
+  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3261
+  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --login
+
+To disconnect:
+  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --logout
+
+Starting iSCSI target server...
+

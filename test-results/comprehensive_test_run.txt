@@ -1,0 +1,52 @@
+=========================================
+Comprehensive iSCSI Target Test Suite
+=========================================
+
+[0;34m=========================================[0m
+[0;34mTesting: mutual_chap (mutual_chap_target)[0m
+[0;34m=========================================[0m
+
+Starting mutual_chap_target on port 3263...
+[0;32mTarget ready[0m
+Running test suite with mutual_chap_config.ini...
+[0;31m✗ Some tests failed for mutual_chap[0m
+  Passed: 10
+  Failed: 1
+  Skipped: 22
+
+[0;34m=========================================[0m
+[0;34mTesting: chap (chap_target)[0m
+[0;34m=========================================[0m
+
+Starting chap_target on port 3262...
+[0;32mTarget ready[0m
+Running test suite with chap_config.ini...
+[0;31m✗ Some tests failed for chap[0m
+  Passed: 10
+  Failed: 1
+  Skipped: 22
+
+[0;34m=========================================[0m
+[0;34mTesting: simple (simple_target)[0m
+[0;34m=========================================[0m
+
+Starting simple_target on port 3261...
+[0;32mTarget ready[0m
+Running test suite with test_config.ini...
+[0;31m✗ Some tests failed for simple[0m
+  Passed: 10
+  Failed: 1
+  Skipped: 22
+
+=========================================
+Overall Results
+=========================================
+[0;32mTotal Passed: 30[0m
+[0;31mTotal Failed: 3[0m
+[1;33mTotal Skipped: 66[0m
+
+[0;31m=========================================[0m
+[0;31mFAILURE! Some tests failed[0m
+[0;31m=========================================[0m
+
+Check detailed results in test-results/

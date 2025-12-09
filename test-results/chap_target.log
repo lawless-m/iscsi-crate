@@ -1,0 +1,35 @@
+   Compiling iscsi-target v0.1.0 (/home/matt/Git/iscsi-crate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running `target/debug/examples/chap_target`
+Creating iSCSI target with CHAP authentication
+Storage: 100 MB in-memory
+Capacity: 204800 blocks of 512 bytes
+
+CHAP Authentication:
+  Username: iscsi-user
+  Password: secretpassword123
+
+iSCSI target configured:
+  Target name: iqn.2025-12.local:storage.chap-disk
+  Listen address: 0.0.0.0:3262
+  Authentication: CHAP (one-way)
+
+To connect from Linux:
+  1. Configure CHAP credentials in /etc/iscsi/iscsid.conf:
+     node.session.auth.authmethod = CHAP
+     node.session.auth.username = iscsi-user
+     node.session.auth.password = secretpassword123
+
+  2. Discover and login:
+     sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3262
+     sudo iscsiadm -m node -T iqn.2025-12.local:storage.chap-disk -p 127.0.0.1:3262 --login
+
+To connect from Windows:
+  1. Open iSCSI Initiator
+  2. Discovery tab -> Add target portal: 127.0.0.1
+  3. Targets tab -> Select target -> Connect
+  4. Advanced Settings -> Enable CHAP login
+  5. Enter username and password
+
+Starting iSCSI target server with CHAP authentication...
+

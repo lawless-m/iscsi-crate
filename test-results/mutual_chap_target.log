@@ -1,0 +1,47 @@
+   Compiling iscsi-target v0.1.0 (/home/matt/Git/iscsi-crate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running `target/debug/examples/mutual_chap_target`
+Creating iSCSI target with Mutual CHAP authentication
+Storage: 100 MB in-memory
+Capacity: 204800 blocks of 512 bytes
+
+Mutual CHAP Authentication:
+  Target validates initiator:
+    Username: target-user
+    Password: target-secret-pass
+  Initiator validates target:
+    Username: init-user
+    Password: init-secret-pass
+
+iSCSI target configured:
+  Target name: iqn.2025-12.local:storage.mutual-chap
+  Listen address: 0.0.0.0:3263
+  Authentication: Mutual CHAP (two-way)
+
+To connect from Linux:
+  1. Configure CHAP credentials in /etc/iscsi/iscsid.conf:
+     # Initiator credentials (to authenticate to target)
+     node.session.auth.authmethod = CHAP
+     node.session.auth.username = target-user
+     node.session.auth.password = target-secret-pass
+     # Target credentials (for mutual authentication)
+     node.session.auth.username_in = init-user
+     node.session.auth.password_in = init-secret-pass
+
+  2. Discover and login:
+     sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3263
+     sudo iscsiadm -m node -T iqn.2025-12.local:storage.mutual-chap -p 127.0.0.1:3263 --login
+
+To connect from Windows:
+  1. Open iSCSI Initiator
+  2. Discovery tab -> Add target portal: 127.0.0.1:3263
+  3. Targets tab -> Select target -> Connect
+  4. Advanced Settings:
+     - Enable CHAP login
+     - Name: target-user
+     - Target secret: target-secret-pass
+     - Enable "Perform mutual authentication"
+     - Initiator secret: init-secret-pass
+
+Starting iSCSI target server with Mutual CHAP authentication...
+

@@ -564,17 +564,20 @@ impl IscsiPdu {
         pdu.specific[8..12].copy_from_slice(&exp_cmd_sn.to_be_bytes());
         // MaxCmdSN at bytes 32-35 (specific[12..16])
         pdu.specific[12..16].copy_from_slice(&max_cmd_sn.to_be_bytes());
-        // Residual count at bytes 40-43 (specific[20..24])
-        pdu.specific[20..24].copy_from_slice(&residual_count.to_be_bytes());
 
         // Add sense data if provided
-        // Note: While RFC 3720 Section 10.4.7 specifies a SenseLength field,
-        // libiscsi expects just the raw sense data without the SenseLength header.
-        // This is a known compatibility issue with libiscsi implementations.
+        // RFC 3720 Section 10.4.7 specifies a SenseLength field at bytes 36-37
         if let Some(sense) = sense_data {
+            // SenseLength at bytes 36-37 (specific[16..18])
+            let sense_len = sense.len() as u16;
+            pdu.specific[16..18].copy_from_slice(&sense_len.to_be_bytes());
+
             pdu.data = sense.to_vec();
             pdu.data_length = pdu.data.len() as u32;
         }
+
+        // Residual count at bytes 40-43 (specific[20..24])
+        pdu.specific[20..24].copy_from_slice(&residual_count.to_be_bytes());
 
         pdu
     }
