@@ -2,14 +2,17 @@
 set -euo pipefail
 
 # Simple script to run tests against TGTD (reference implementation)
-# Usage: ./test-tgtd.sh
+# Usage: ./test-tgtd.sh [category]
+#   category: discovery, commands, io, or full (default: full)
 
 WORK_DIR="/nonreplicated/testing/iscsi-auto-fix"
 IMAGE_NAME="iscsi-auto-test"
+MODE="${1:-full}"
 
 echo "========================================="
 echo "Running Tests Against TGTD"
 echo "========================================="
+echo "Mode: $MODE"
 echo ""
 
 # Check if setup has been run
@@ -22,7 +25,7 @@ fi
 docker run --rm \
     -v $WORK_DIR/repo:/repo \
     $IMAGE_NAME \
-    /bin/bash -c "cd /repo && sudo timeout 60 ./validate-against-tgtd.sh"
+    /bin/bash -c "cd /repo && sudo timeout 60 ./validate-against-tgtd.sh $MODE"
 
 EXIT_CODE=$?
 

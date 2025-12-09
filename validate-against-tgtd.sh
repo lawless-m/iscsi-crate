@@ -2,15 +2,29 @@
 set -euo pipefail
 
 # Validates tests against TGTD reference implementation
-# Usage: ./validate-against-tgtd.sh
+# Usage: ./validate-against-tgtd.sh [category]
+#   category: discovery, commands, io, or full/all (default: full)
 #
 # Returns:
 #   0 - All tests pass against TGTD
 #   1 - Some tests fail against TGTD (test is buggy!)
 #   2 - TGTD not available / setup failed
 
+TEST_CATEGORY="${1:-full}"
+
+# Validate test category
+case "$TEST_CATEGORY" in
+    full|all|discovery|commands|io)
+        ;;
+    *)
+        echo "Error: Unknown test category '$TEST_CATEGORY'"
+        echo "Usage: $0 [discovery|commands|io|full]"
+        exit 2
+        ;;
+esac
+
 echo "========================================="
-echo "TGTD Validation"
+echo "TGTD Validation ($TEST_CATEGORY)"
 echo "========================================="
 echo "Validating tests against TGTD reference implementation..."
 echo
@@ -104,9 +118,15 @@ if [ ! -f ./iscsi-test-suite/iscsi-test-suite ]; then
 fi
 
 # Run tests against TGTD
-echo "Running tests against TGTD..."
+echo "Running tests against TGTD (category: $TEST_CATEGORY)..."
 echo "========================================="
-./iscsi-test-suite/iscsi-test-suite "$TGTD_TEST_CONFIG" 2>&1 | tee /tmp/tgtd-validation.log
+
+# Build test command with category flag if needed
+if [ "$TEST_CATEGORY" = "full" ] || [ "$TEST_CATEGORY" = "all" ]; then
+    ./iscsi-test-suite/iscsi-test-suite "$TGTD_TEST_CONFIG" 2>&1 | tee /tmp/tgtd-validation.log
+else
+    ./iscsi-test-suite/iscsi-test-suite -c "$TEST_CATEGORY" "$TGTD_TEST_CONFIG" 2>&1 | tee /tmp/tgtd-validation.log
+fi
 TEST_EXIT=$?
 
 echo

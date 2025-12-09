@@ -189,10 +189,20 @@ if command -v claude &> /dev/null; then
             echo "========================================="
             echo ""
 
+            # Detect test category early for TGTD validation
+            TGTD_TEST_MODE="full"
+            if echo "$ISSUE_TITLE" | grep -qE '\bTL-[0-9]+\b'; then
+                TGTD_TEST_MODE="discovery"
+            elif echo "$ISSUE_TITLE" | grep -qE '\bTI-[0-9]+\b'; then
+                TGTD_TEST_MODE="io"
+            elif echo "$ISSUE_TITLE" | grep -qE '\bTC-[0-9]+\b'; then
+                TGTD_TEST_MODE="commands"
+            fi
+
             # For test implementations, validate against TGTD first
             if [ -f "./validate-against-tgtd.sh" ]; then
                 set +e
-                sudo timeout 60 ./validate-against-tgtd.sh
+                sudo timeout 60 ./validate-against-tgtd.sh $TGTD_TEST_MODE
                 TGTD_EXIT_CODE=$?
                 set -e
 
