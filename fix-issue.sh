@@ -74,6 +74,22 @@ fi
 ISSUE_BODY=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json body --jq '.body')
 ISSUE_URL=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json url --jq '.url')
 
+# Fetch issue comments for additional context
+ISSUE_COMMENTS=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json comments --jq '.comments[] | "## Comment by @\(.author.login) (\(.createdAt))\n\n\(.body)\n"' || echo "")
+if [ -n "$ISSUE_COMMENTS" ]; then
+    COMMENTS_SECTION=$(cat <<COMMENTS
+
+================================================================================
+ISSUE COMMENTS (Important context and updates):
+================================================================================
+
+$ISSUE_COMMENTS
+COMMENTS
+)
+else
+    COMMENTS_SECTION=""
+fi
+
 # Gather context about previous attempts if this is not the first iteration
 PREVIOUS_ATTEMPTS=""
 if [ -n "$ITERATION" ] && [ "$ITERATION" -gt 1 ]; then
@@ -130,6 +146,7 @@ GitHub Issue #$ISSUE_NUM: $ISSUE_TITLE
 URL: $ISSUE_URL
 
 $ISSUE_BODY
+$COMMENTS_SECTION
 $PREVIOUS_ATTEMPTS
 
 ================================================================================
