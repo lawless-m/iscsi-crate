@@ -5,7 +5,7 @@ set -euo pipefail
 # This script sets up a proper git clone with push access
 
 WORK_DIR="/nonreplicated/testing/iscsi-auto-fix"
-REPO_URL="https://github.com/lawless-m/iscsi-crate.git"
+REPO_URL="git@github.com:lawless-m/iscsi-crate.git"
 CONTAINER_NAME="iscsi-auto-fix"
 IMAGE_NAME="iscsi-auto-test"
 
@@ -30,11 +30,10 @@ echo "Cloning repository..."
 git clone "$REPO_URL" repo
 cd repo
 
-# 4. Configure git for commits and authentication
+# 4. Configure git for commits
 echo "Configuring git..."
 git config user.name "Claude Code Auto-Fixer"
 git config user.email "noreply@anthropic.com"
-git config credential.helper "gh auth git-credential"
 
 # 5. Build the Docker image
 echo "Building Docker image..."
@@ -103,7 +102,8 @@ echo "To run the auto-fix loop:"
 echo ""
 echo "  docker run --name $CONTAINER_NAME \\"
 echo "    -v $WORK_DIR/repo:/repo \\"
-echo "    -v ~/.config/gh:/home/claude/.config/gh \\"
+echo "    -v ~/.ssh:/home/claude/.ssh:ro \\"
+echo "    -v ~/.config/gh:/home/claude/.config/gh:ro \\"
 echo "    -v ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro \\"
 echo "    $IMAGE_NAME \\"
 echo "    /bin/bash -c 'source ~/.cargo/env && cd /repo && ./auto-fix-loop.sh 10 haiku full'"

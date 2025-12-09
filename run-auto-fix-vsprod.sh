@@ -33,7 +33,8 @@ docker rm -f $CONTAINER_NAME 2>/dev/null || true
 # Run the container
 docker run --name $CONTAINER_NAME \
     -v $WORK_DIR/repo:/repo \
-    -v ~/.config/gh:/home/claude/.config/gh \
+    -v ~/.ssh:/home/claude/.ssh:ro \
+    -v ~/.config/gh:/home/claude/.config/gh:ro \
     -v ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro \
     $IMAGE_NAME \
     /bin/bash -c "source ~/.cargo/env && cd /repo && ./auto-fix-loop.sh $ITERATIONS $MODEL $MODE"
