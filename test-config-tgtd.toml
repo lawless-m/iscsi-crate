@@ -1,9 +1,0 @@
-[target]
-portal = 127.0.0.1:3262
-iqn = iqn.2025-12.local:storage.memory-disk
-lun = 0
-
-[options]
-timeout = 30
-verbosity = 1
-stop_on_fail = false
