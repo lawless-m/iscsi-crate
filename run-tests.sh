@@ -13,7 +13,7 @@ TEST_MODE="${1:-simple}"
 
 if [ "$TEST_MODE" = "full" ]; then
     TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
-    TEST_ARGS="./iscsi-test-suite/config/test_config.ini"
+    TEST_ARGS="./test-config.toml"
     TEST_NAME="iscsi-test-suite"
 else
     TEST_CMD="./simple_test"
@@ -48,10 +48,35 @@ echo "  OS: $OS_INFO"
 echo "  Date: $DATE"
 echo
 
+# Build test binary if needed
+if [ "$TEST_MODE" = "full" ]; then
+    echo "Building iscsi-test-suite..."
+    if [ ! -d "./iscsi-test-suite" ]; then
+        echo -e "${RED}ERROR: iscsi-test-suite directory not found${NC}"
+        exit 2
+    fi
+    (cd iscsi-test-suite && make clean && make) || {
+        echo -e "${RED}ERROR: Failed to build iscsi-test-suite${NC}"
+        exit 2
+    }
+    echo "Build successful"
+    echo
+else
+    # Build simple_test if needed
+    if [ ! -f "$TEST_CMD" ]; then
+        echo "Building simple_test..."
+        gcc -o simple_test simple_test.c -liscsi || {
+            echo -e "${RED}ERROR: Failed to build simple_test${NC}"
+            exit 2
+        }
+        echo "Build successful"
+        echo
+    fi
+fi
+
 # Check if test binary exists
 if [ ! -f "$TEST_CMD" ]; then
     echo -e "${RED}ERROR: Test binary not found: $TEST_CMD${NC}"
-    echo "Run: gcc -o simple_test simple_test.c -liscsi"
     exit 2
 fi
 
