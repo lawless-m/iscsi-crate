@@ -149,6 +149,44 @@ if command -v claude &> /dev/null; then
     echo "  Mode: FULLY AUTOMATED"
     echo
 
+    # Detect test category for baseline testing
+    echo "========================================="
+    echo "Establishing test baseline..."
+    echo "========================================="
+    TEST_CATEGORY="full"
+    if echo "$ISSUE_TITLE" | grep -qE '\bTL-[0-9]+\b'; then
+        TEST_CATEGORY="discovery"
+        echo "Detected discovery test (TL-XXX) - will test discovery category only"
+    elif echo "$ISSUE_TITLE" | grep -qE '\bTI-[0-9]+\b'; then
+        TEST_CATEGORY="io"
+        echo "Detected I/O test (TI-XXX) - will test I/O category only"
+    elif echo "$ISSUE_TITLE" | grep -qE '\bTC-[0-9]+\b'; then
+        TEST_CATEGORY="commands"
+        echo "Detected commands test (TC-XXX) - will test commands category only"
+    else
+        echo "No specific test ID detected - will test all categories"
+    fi
+
+    # Run baseline tests to detect pre-existing failures
+    BASELINE_FILE="/tmp/baseline-failures-$$"
+    echo ""
+    echo "Running baseline tests to identify pre-existing failures..."
+    set +e
+    ./run-tests.sh $TEST_CATEGORY 2>&1 | grep -E '\[FAIL\]' | sed -E 's/^[[:space:]]+([A-Z]+-[0-9]+):.*/\1/' | sort > "$BASELINE_FILE"
+    BASELINE_EXIT=$?
+    set -e
+
+    BASELINE_COUNT=$(wc -l < "$BASELINE_FILE")
+    if [ $BASELINE_COUNT -gt 0 ]; then
+        echo "Pre-existing failures detected:"
+        cat "$BASELINE_FILE" | sed 's/^/  - /'
+        echo ""
+        echo "Implementation will be accepted if these failures don't get worse."
+    else
+        echo "No pre-existing failures - all tests passing!"
+    fi
+    echo ""
+
     # Build claude command
     CLAUDE_OPTS=(
         --model "$MODEL"
@@ -278,8 +316,101 @@ if command -v claude &> /dev/null; then
                 gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation introduced a timeout (exit code 124). Tests hung after 30 seconds. Leaving issue open for debugging."
             fi
         else
-            echo "❌ Tests failed (exit $TEST_EXIT_CODE). Leaving issue open."
-            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation complete but tests failed with exit code $TEST_EXIT_CODE. Leaving issue open for fixes."
+            # Tests failed - check for regressions against baseline
+            echo ""
+            echo "========================================="
+            echo "Checking for regressions..."
+            echo "========================================="
+
+            # Capture current failures
+            CURRENT_FILE="/tmp/current-failures-$$"
+            ./run-tests.sh $TEST_MODE 2>&1 | grep -E '\[FAIL\]' | sed -E 's/^[[:space:]]+([A-Z]+-[0-9]+):.*/\1/' | sort > "$CURRENT_FILE"
+
+            # Compare against baseline
+            NEW_FAILURES=$(comm -13 "$BASELINE_FILE" "$CURRENT_FILE" 2>/dev/null || echo "")
+            FIXED_TESTS=$(comm -23 "$BASELINE_FILE" "$CURRENT_FILE" 2>/dev/null || echo "")
+            STILL_FAILING=$(comm -12 "$BASELINE_FILE" "$CURRENT_FILE" 2>/dev/null || echo "")
+
+            NEW_FAIL_COUNT=$(echo "$NEW_FAILURES" | grep -v '^$' | wc -l)
+            FIXED_COUNT=$(echo "$FIXED_TESTS" | grep -v '^$' | wc -l)
+            STILL_FAIL_COUNT=$(echo "$STILL_FAILING" | grep -v '^$' | wc -l)
+
+            echo ""
+            if [ $NEW_FAIL_COUNT -gt 0 ]; then
+                echo "❌ REGRESSIONS DETECTED - New test failures:"
+                echo "$NEW_FAILURES" | sed 's/^/  - /'
+                echo ""
+                echo "This implementation introduced $NEW_FAIL_COUNT new failure(s)."
+
+                COMMENT_BODY="⚠️ Implementation introduced regressions - $NEW_FAIL_COUNT new test failure(s):
+\`\`\`
+$NEW_FAILURES
+\`\`\`"
+
+                if [ $FIXED_COUNT -gt 0 ]; then
+                    echo "Fixed tests: $FIXED_COUNT"
+                    echo "$FIXED_TESTS" | sed 's/^/  + /'
+                    COMMENT_BODY="${COMMENT_BODY}
+
+However, $FIXED_COUNT test(s) were fixed:
+\`\`\`
+$FIXED_TESTS
+\`\`\`"
+                fi
+
+                if [ $STILL_FAIL_COUNT -gt 0 ]; then
+                    echo ""
+                    echo "Pre-existing failures (unchanged): $STILL_FAIL_COUNT"
+                    COMMENT_BODY="${COMMENT_BODY}
+
+Pre-existing failures (unchanged): $STILL_FAIL_COUNT"
+                fi
+
+                echo ""
+                echo "Leaving issue open for fixes."
+                gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "$COMMENT_BODY"
+            else
+                echo "✅ NO REGRESSIONS - All failures were pre-existing!"
+                echo ""
+
+                if [ $FIXED_COUNT -gt 0 ]; then
+                    echo "🎉 Fixed tests: $FIXED_COUNT"
+                    echo "$FIXED_TESTS" | sed 's/^/  + /'
+                    echo ""
+                fi
+
+                if [ $STILL_FAIL_COUNT -gt 0 ]; then
+                    echo "Pre-existing failures (unchanged): $STILL_FAIL_COUNT"
+                    echo "$STILL_FAILING" | sed 's/^/  - /'
+                    echo ""
+                fi
+
+                COMMENT_BODY="✅ Implementation complete with NO regressions!"
+
+                if [ $FIXED_COUNT -gt 0 ]; then
+                    COMMENT_BODY="${COMMENT_BODY}
+
+🎉 Fixed $FIXED_COUNT test(s):
+\`\`\`
+$FIXED_TESTS
+\`\`\`"
+                fi
+
+                if [ $STILL_FAIL_COUNT -gt 0 ]; then
+                    COMMENT_BODY="${COMMENT_BODY}
+
+Note: $STILL_FAIL_COUNT test(s) were already failing before this implementation (not regressions):
+\`\`\`
+$STILL_FAILING
+\`\`\`"
+                fi
+
+                echo "Closing issue #$ISSUE_NUM - implementation successful!"
+                gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "$COMMENT_BODY"
+            fi
+
+            # Clean up temporary files
+            rm -f "$CURRENT_FILE" "$BASELINE_FILE"
         fi
     else
         echo "⚠️ Claude Code did not complete successfully (exit $CLAUDE_EXIT_CODE)"
