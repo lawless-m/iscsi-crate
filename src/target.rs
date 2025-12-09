@@ -487,7 +487,8 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         let mut offset = 0u32;
         let mut data_sn = 0u32;
 
-        // StatSN should only be incremented once for the final PDU
+        // StatSN should only be valid for the final PDU (with F and S bits set)
+        // For non-final PDUs, StatSN is reserved
         let stat_sn = session.next_stat_sn();
 
         while offset < response.data.len() as u32 {
@@ -497,10 +498,13 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
             let chunk = response.data[offset as usize..offset as usize + chunk_size].to_vec();
 
+            // StatSN is only valid for final PDU; for non-final PDUs use 0
+            let pdu_stat_sn = if is_final { stat_sn } else { 0 };
+
             let data_in = IscsiPdu::scsi_data_in(
                 cmd.itt,
                 0xFFFF_FFFF, // TTT
-                stat_sn,
+                pdu_stat_sn,
                 session.exp_cmd_sn,
                 session.max_cmd_sn,
                 data_sn,
