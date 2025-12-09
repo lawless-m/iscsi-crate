@@ -119,6 +119,7 @@ if command -v claude &> /dev/null; then
     # Build claude command with options
     CLAUDE_OPTS=(
         --model "$MODEL"
+        --verbose
         --append-system-prompt "You are fixing GitHub issue #$ISSUE_NUM in an automated workflow. Be concise and focused."
     )
 
