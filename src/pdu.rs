@@ -282,8 +282,19 @@ impl IscsiPdu {
         buf.push(((data_len >> 16) & 0xFF) as u8);
         buf.write_u16::<BigEndian>((data_len & 0xFFFF) as u16).unwrap();
 
-        // Bytes 8-15: LUN
-        buf.write_u64::<BigEndian>(self.lun).unwrap();
+        // Bytes 8-15: LUN field
+        // According to RFC 3720, LUN is only in:
+        // - SCSI Command PDU
+        // - SCSI Data-Out PDU
+        // - Task Management Function PDU
+        // All other PDUs should have reserved/0 in this field
+        let write_lun = matches!(self.opcode, opcode::SCSI_COMMAND | opcode::SCSI_DATA_OUT | opcode::TASK_MANAGEMENT_REQUEST);
+        if write_lun {
+            buf.write_u64::<BigEndian>(self.lun).unwrap();
+        } else {
+            // For other PDU types (including SCSI Response), this field is reserved and should be 0
+            buf.write_u64::<BigEndian>(0).unwrap();
+        }
 
         // Bytes 16-19: Initiator Task Tag
         buf.write_u32::<BigEndian>(self.itt).unwrap();

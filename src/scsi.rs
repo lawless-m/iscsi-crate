@@ -299,8 +299,8 @@ impl ScsiHandler {
                 Ok(ScsiResponse::good_no_data())
             }
             None => {
-                log::debug!("Unsupported SCSI opcode: 0x{:02x}", opcode);
-                Ok(ScsiResponse::check_condition(SenseData::invalid_command()))
+                let sense = SenseData::invalid_command();
+                Ok(ScsiResponse::check_condition(sense))
             }
         }
     }
@@ -931,6 +931,14 @@ mod tests {
         let cdb = [0xFF, 0, 0, 0, 0, 0]; // Invalid opcode
         let response = ScsiHandler::handle_command(&cdb, &device, None).unwrap();
         assert_eq!(response.status, scsi_status::CHECK_CONDITION);
+        assert!(response.sense.is_some());
+        let sense = response.sense.unwrap();
+        assert_eq!(sense.sense_key, sense_key::ILLEGAL_REQUEST);
+        assert_eq!(sense.asc, asc::INVALID_FIELD_IN_CDB);
+        // Verify sense data serialization
+        let sense_bytes = sense.to_bytes();
+        assert_eq!(sense_bytes[2], sense_key::ILLEGAL_REQUEST);
+        assert_eq!(sense_bytes[12], asc::INVALID_FIELD_IN_CDB);
     }
 
     #[test]
