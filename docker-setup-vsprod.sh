@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     nodejs \
     npm \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
