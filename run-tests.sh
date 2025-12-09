@@ -2,24 +2,50 @@
 set -euo pipefail
 
 # Test runner that posts GitHub issues on failures
-# Usage: ./run-tests.sh [simple|full]
-#   simple - Run simple_test (default)
-#   full   - Run full iscsi-test-suite
+# Usage: ./run-tests.sh [simple|full|discovery|commands|io]
+#   simple    - Run simple_test (default)
+#   full      - Run full iscsi-test-suite (all tests)
+#   discovery - Run discovery test category only
+#   commands  - Run SCSI command test category only
+#   io        - Run I/O test category only
 
 REPO="lawless-m/iscsi-crate"
 
 # Support both simple_test and full test suite
 TEST_MODE="${1:-simple}"
 
-if [ "$TEST_MODE" = "full" ]; then
-    TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
-    TEST_ARGS="./test-config.toml"
-    TEST_NAME="iscsi-test-suite"
-else
-    TEST_CMD="./simple_test"
-    TEST_ARGS="iscsi://127.0.0.1:3261/iqn.2025-12.local:storage.memory-disk/0"
-    TEST_NAME="simple_test"
-fi
+case "$TEST_MODE" in
+    full)
+        TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
+        TEST_ARGS="./test-config.toml"
+        TEST_NAME="iscsi-test-suite (all)"
+        ;;
+    discovery)
+        TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
+        TEST_ARGS="-c discovery ./test-config.toml"
+        TEST_NAME="iscsi-test-suite (discovery)"
+        ;;
+    commands)
+        TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
+        TEST_ARGS="-c commands ./test-config.toml"
+        TEST_NAME="iscsi-test-suite (commands)"
+        ;;
+    io)
+        TEST_CMD="./iscsi-test-suite/iscsi-test-suite"
+        TEST_ARGS="-c io ./test-config.toml"
+        TEST_NAME="iscsi-test-suite (io)"
+        ;;
+    simple)
+        TEST_CMD="./simple_test"
+        TEST_ARGS="iscsi://127.0.0.1:3261/iqn.2025-12.local:storage.memory-disk/0"
+        TEST_NAME="simple_test"
+        ;;
+    *)
+        echo "Error: Unknown test mode '$TEST_MODE'"
+        echo "Usage: $0 [simple|full|discovery|commands|io]"
+        exit 2
+        ;;
+esac
 
 ISSUE_LABEL="test-failure"
 
@@ -49,7 +75,19 @@ echo "  Date: $DATE"
 echo
 
 # Build test binary if needed
-if [ "$TEST_MODE" = "full" ]; then
+if [ "$TEST_MODE" = "simple" ]; then
+    # Build simple_test if needed
+    if [ ! -f "$TEST_CMD" ]; then
+        echo "Building simple_test..."
+        gcc -o simple_test simple_test.c -liscsi || {
+            echo -e "${RED}ERROR: Failed to build simple_test${NC}"
+            exit 2
+        }
+        echo "Build successful"
+        echo
+    fi
+else
+    # Build iscsi-test-suite for all other modes (full, discovery, commands, io)
     echo "Building iscsi-test-suite..."
     if [ ! -d "./iscsi-test-suite" ]; then
         echo -e "${RED}ERROR: iscsi-test-suite directory not found${NC}"
@@ -61,17 +99,6 @@ if [ "$TEST_MODE" = "full" ]; then
     }
     echo "Build successful"
     echo
-else
-    # Build simple_test if needed
-    if [ ! -f "$TEST_CMD" ]; then
-        echo "Building simple_test..."
-        gcc -o simple_test simple_test.c -liscsi || {
-            echo -e "${RED}ERROR: Failed to build simple_test${NC}"
-            exit 2
-        }
-        echo "Build successful"
-        echo
-    fi
 fi
 
 # Check if test binary exists
@@ -197,14 +224,15 @@ $CLEAN_OUTPUT
 \`\`\`
 
 ### Files Involved
-$(if [ "$TEST_MODE" = "full" ]; then
-    echo "- Test Suite: \`iscsi-test-suite/\`"
-    echo "- Config: \`test-config.toml\`"
-    echo "- Target Implementation: \`src/target.rs\`, \`src/pdu.rs\`, \`src/scsi.rs\`"
-else
+$(if [ "$TEST_MODE" = "simple" ]; then
     echo "- Test Program: \`simple_test.c\`"
     echo "- Test Binary: \`simple_test\`"
     echo "- Target Example: \`examples/simple_target.rs\`"
+else
+    echo "- Test Suite: \`iscsi-test-suite/\`"
+    echo "- Config: \`test-config.toml\`"
+    echo "- Test Mode: $TEST_NAME"
+    echo "- Target Implementation: \`src/target.rs\`, \`src/pdu.rs\`, \`src/scsi.rs\`"
 fi)
 - Configuration: Target at 127.0.0.1:3261
 
@@ -212,16 +240,19 @@ fi)
 - **Target Connectivity:** $(timeout 2 bash -c 'echo "" | nc -v 127.0.0.1 3261' 2>&1 | head -1 || echo "Cannot connect to 127.0.0.1:3261")
 
 ### Expected Behavior
-$(if [ "$TEST_MODE" = "full" ]; then
-    echo "All 33 tests from the comprehensive iSCSI test suite should pass."
-    echo "Current failures indicate protocol-level bugs in the Rust iSCSI target implementation."
-else
+$(if [ "$TEST_MODE" = "simple" ]; then
     echo "All 5 basic tests should pass:"
     echo "1. Create iSCSI context"
     echo "2. Connect to target"
     echo "3. INQUIRY command"
     echo "4. READ CAPACITY command"
     echo "5. READ/WRITE operations with data integrity check"
+elif [ "$TEST_MODE" = "full" ]; then
+    echo "All 33 tests from the comprehensive iSCSI test suite should pass."
+    echo "Current failures indicate protocol-level bugs in the Rust iSCSI target implementation."
+else
+    echo "All tests from the $TEST_NAME category should pass."
+    echo "Current failures indicate protocol-level bugs in the Rust iSCSI target implementation."
 fi)
 
 ### Actual Behavior

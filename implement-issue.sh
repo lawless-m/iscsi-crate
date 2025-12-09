@@ -224,8 +224,29 @@ if command -v claude &> /dev/null; then
         echo "Running tests against our target..."
         echo "========================================="
 
+        # Detect test category from issue title
+        TEST_MODE="full"
+        if echo "$ISSUE_TITLE" | grep -qE '\bTL-[0-9]+\b'; then
+            TEST_ID=$(echo "$ISSUE_TITLE" | grep -oE 'TL-[0-9]+' | head -1)
+            echo "Detected discovery test: $TEST_ID"
+            echo "Running discovery test category only..."
+            TEST_MODE="discovery"
+        elif echo "$ISSUE_TITLE" | grep -qE '\bTI-[0-9]+\b'; then
+            TEST_ID=$(echo "$ISSUE_TITLE" | grep -oE 'TI-[0-9]+' | head -1)
+            echo "Detected I/O test: $TEST_ID"
+            echo "Running I/O test category only..."
+            TEST_MODE="io"
+        elif echo "$ISSUE_TITLE" | grep -qE '\bTC-[0-9]+\b'; then
+            TEST_ID=$(echo "$ISSUE_TITLE" | grep -oE 'TC-[0-9]+' | head -1)
+            echo "Detected command test: $TEST_ID"
+            echo "Running command test category only..."
+            TEST_MODE="commands"
+        else
+            echo "No specific test ID detected - running full test suite..."
+        fi
+
         set +e
-        ./run-tests.sh full
+        ./run-tests.sh $TEST_MODE
         TEST_EXIT_CODE=$?
         set -e
 
