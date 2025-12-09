@@ -179,6 +179,91 @@ else
     # Look for lines like "  TI-007: Large Transfer Read [FAIL]"
     FAILED_TESTS=$(grep -E '\[.*FAIL.*\]' "$OUTPUT_FILE" | sed 's/\x1b\[[0-9;]*m//g' | sed -E 's/^[[:space:]]+([A-Z]+-[0-9]+):.*$/\1/' | tr '\n' ', ' | sed 's/,$//' || echo "")
 
+    # Run TGTD validation for test suite modes (not for simple_test)
+    TGTD_RESULT=""
+    TGTD_STATUS=""
+    TGTD_INTERPRETATION=""
+
+    if [ "$TEST_MODE" != "simple" ]; then
+        echo
+        echo "Running TGTD validation to distinguish test bugs from target bugs..."
+        TGTD_OUTPUT_FILE=$(mktemp)
+        TGTD_EXIT_CODE=0
+
+        # Map test mode to TGTD category
+        case "$TEST_MODE" in
+            full)
+                TGTD_CATEGORY="full"
+                ;;
+            discovery)
+                TGTD_CATEGORY="discovery"
+                ;;
+            commands)
+                TGTD_CATEGORY="commands"
+                ;;
+            io)
+                TGTD_CATEGORY="io"
+                ;;
+        esac
+
+        # Run TGTD validation (requires sudo and validate-against-tgtd.sh script)
+        if [ -f "./validate-against-tgtd.sh" ]; then
+            set +e
+            sudo timeout 60 ./validate-against-tgtd.sh "$TGTD_CATEGORY" > "$TGTD_OUTPUT_FILE" 2>&1
+            TGTD_EXIT_CODE=$?
+            set -e
+
+            TGTD_CLEAN_OUTPUT=$(cat "$TGTD_OUTPUT_FILE" | sed 's/\x1b\[[0-9;]*m//g')
+
+            if [ $TGTD_EXIT_CODE -eq 0 ]; then
+                TGTD_STATUS="✅ PASSED"
+                TGTD_INTERPRETATION="**This is a TARGET BUG** - The test passes against TGTD (reference implementation), so the Rust target implementation is incorrect."
+            elif [ $TGTD_EXIT_CODE -eq 124 ]; then
+                TGTD_STATUS="⏱️ TIMEOUT"
+                TGTD_INTERPRETATION="**This is likely a TEST BUG** - The test timed out against TGTD, indicating the test implementation has issues."
+            else
+                TGTD_STATUS="❌ FAILED"
+                TGTD_INTERPRETATION="**This is a TEST BUG** - The test also fails against TGTD (reference implementation), so the test itself is incorrect, not the Rust target."
+            fi
+
+            TGTD_RESULT=$(cat <<EOF
+
+### TGTD Validation Results
+
+**Status:** $TGTD_STATUS (exit code: $TGTD_EXIT_CODE)
+
+$TGTD_INTERPRETATION
+
+<details>
+<summary>Click to see full TGTD validation output</summary>
+
+\`\`\`
+$TGTD_CLEAN_OUTPUT
+\`\`\`
+
+</details>
+
+> **What is TGTD validation?**
+> TGTD (Linux SCSI Target) is the authoritative reference implementation of the iSCSI protocol.
+> We run failing tests against TGTD to determine if the problem is in our test code or our target code:
+> - If the test PASSES against TGTD → our Rust target has a bug
+> - If the test FAILS against TGTD → our test has a bug
+EOF
+)
+            rm "$TGTD_OUTPUT_FILE"
+        else
+            TGTD_RESULT=$(cat <<EOF
+
+### TGTD Validation Results
+
+**Status:** ⚠️ SKIPPED (validate-against-tgtd.sh not found)
+
+Could not validate against TGTD reference implementation. Unable to determine if this is a test bug or target bug.
+EOF
+)
+        fi
+    fi
+
     # Create issue title
     if [ $EXIT_CODE -eq 124 ]; then
         if [ -n "$FAILED_TESTS" ]; then
@@ -210,6 +295,7 @@ else
 **Test Command:** \`$TEST_CMD $TEST_ARGS\`
 **Exit Code:** $EXIT_CODE_INFO
 **Date:** $DATE
+$TGTD_RESULT
 
 ### Environment
 - **Commit:** \`$COMMIT_HASH\`
