@@ -171,12 +171,14 @@ struct iscsi_context* create_iscsi_context_for_test(test_config_t *config) {
 
     iscsi_set_targetname(iscsi, iscsi_url->target);
     iscsi_set_session_type(iscsi, ISCSI_SESSION_NORMAL);
-    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE_CRC32C);
+    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE);
 
     /* Set authentication if configured */
-    if (config->auth_method && strcmp(config->auth_method, "chap") == 0) {
-        if (config->username && config->password) {
-            iscsi_set_initiator_username_pwd(iscsi, config->username, config->password);
+    if (config->auth_method) {
+        if (strcmp(config->auth_method, "chap") == 0 || strcmp(config->auth_method, "mutual_chap") == 0) {
+            if (config->username && config->password) {
+                iscsi_set_initiator_username_pwd(iscsi, config->username, config->password);
+            }
         }
         if (strcmp(config->auth_method, "mutual_chap") == 0) {
             if (config->mutual_username && config->mutual_password) {
