@@ -611,13 +611,13 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
         if response.status == pdu::scsi_status::CHECK_CONDITION {
             if let Some(ref sd) = response.sense {
-                let mut sense_bytes = sd.to_bytes();
+                let sense_bytes = sd.to_bytes();
                 log::debug!(
                     "Sending CHECK CONDITION with sense data: sense_key=0x{:02x}, asc=0x{:02x}, ascq=0x{:02x}",
                     sd.sense_key, sd.asc, sd.ascq
                 );
                 // Store the FULL sense data (including response code) for REQUEST SENSE
-                session.last_sense_data = Some(sense_bytes.clone());
+                session.last_sense_data = Some(sense_bytes);
             } else {
                 log::warn!("CHECK CONDITION status but no sense data available!");
             }
@@ -626,11 +626,10 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
             session.last_sense_data = None;
         }
 
-        let response_code = if response.status != pdu::scsi_status::GOOD {
-            1 // Target Failure when status is not GOOD
-        } else {
-            0 // Command Completed at Target
-        };
+        // RFC 3720: Response field indicates whether the target successfully processed the command
+        // Use 0x00 (Command Completed at Target) for all successful SCSI status values, including CHECK_CONDITION
+        // libiscsi parses sense data from the SCSI Response PDU when Response=0x00
+        let response_code = 0; // Command Completed at Target
 
         // Include sense data in the response PDU per RFC 3720 Section 10.4.7.
         // We also store it for REQUEST SENSE retrieval, as libiscsi will call REQUEST SENSE
