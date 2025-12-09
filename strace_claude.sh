@@ -24,7 +24,7 @@ fi
 # Check if strace is installed
 if ! docker exec "$CONTAINER_NAME" which strace >/dev/null 2>&1; then
     echo "Installing strace in container..."
-    docker exec -u root "$CONTAINER_NAME" sh -c 'apt-get update -qq && apt-get install -y -qq strace' >/dev/null
+    docker exec -u root "$CONTAINER_NAME" sh -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strace' >/dev/null 2>&1
     echo "strace installed"
     echo
 fi

@@ -24,7 +24,7 @@ fi
 # Check if inotifywait is installed
 if ! docker exec "$CONTAINER_NAME" which inotifywait >/dev/null 2>&1; then
     echo "Installing inotify-tools in container..."
-    docker exec -u root "$CONTAINER_NAME" sh -c 'apt-get update -qq && apt-get install -y -qq inotify-tools' >/dev/null
+    docker exec -u root "$CONTAINER_NAME" sh -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq inotify-tools' >/dev/null 2>&1
     echo "inotify-tools installed"
     echo
 fi
