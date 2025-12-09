@@ -1,5 +1,6 @@
 #include "test_discovery.h"
 #include "utils.h"
+#include "iscsi_pdu_helper.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -180,12 +181,120 @@ static test_result_t test_param_negotiation(struct iscsi_context *unused_iscsi,
 static test_result_t test_invalid_params(struct iscsi_context *unused_iscsi,
                                           test_config_t *config,
                                           test_report_t *report) {
-    (void)unused_iscsi;
-    (void)config;
+    uint8_t *pdu = NULL;
+    uint8_t *response = NULL;
+    size_t pdu_size = 0;
+    size_t response_size = 0;
+    int status;
+    int rejected_count = 0;
+    int test_count = 0;
+    char *host;
+    char *port_str;
+    int port = 3260;
+    char portal_copy[256];
+    char msg[512];
 
-    /* This requires low-level PDU manipulation which libiscsi doesn't easily support */
-    report_set_result(report, TEST_SKIP, "Requires low-level PDU manipulation");
-    return TEST_SKIP;
+    (void)unused_iscsi;
+
+    if (!config->portal || strlen(config->portal) == 0) {
+        report_set_result(report, TEST_SKIP, "No portal configured");
+        return TEST_SKIP;
+    }
+
+    /* Parse portal address (format: "host:port" or just "host") */
+    strncpy(portal_copy, config->portal, sizeof(portal_copy) - 1);
+    portal_copy[sizeof(portal_copy) - 1] = '\0';
+
+    host = portal_copy;
+    port_str = strchr(portal_copy, ':');
+    if (port_str) {
+        *port_str = '\0';
+        port_str++;
+        port = atoi(port_str);
+        if (port <= 0 || port > 65535) {
+            port = 3260;
+        }
+    }
+
+    /* Test 1: Invalid MaxRecvDataSegmentLength=0 */
+    test_count++;
+    pdu = build_login_pdu_invalid_maxrecvdatasize(&pdu_size);
+    if (pdu) {
+        response = send_pdu_and_recv_response(host, port, pdu, pdu_size, &response_size);
+        if (response) {
+            status = parse_login_response_status(response, response_size);
+            if (status == 0) {
+                /* Target correctly rejected the invalid parameter */
+                rejected_count++;
+            }
+            free(response);
+            response = NULL;
+        }
+        free(pdu);
+        pdu = NULL;
+    }
+
+    /* Test 2: Invalid MaxConnections=0 */
+    test_count++;
+    pdu = build_login_pdu_invalid_maxconnections(&pdu_size);
+    if (pdu) {
+        response = send_pdu_and_recv_response(host, port, pdu, pdu_size, &response_size);
+        if (response) {
+            status = parse_login_response_status(response, response_size);
+            if (status == 0) {
+                /* Target correctly rejected the invalid parameter */
+                rejected_count++;
+            }
+            free(response);
+            response = NULL;
+        }
+        free(pdu);
+        pdu = NULL;
+    }
+
+    /* Test 3: Contradictory parameter combination */
+    test_count++;
+    pdu = build_login_pdu_invalid_param_combo(&pdu_size);
+    if (pdu) {
+        response = send_pdu_and_recv_response(host, port, pdu, pdu_size, &response_size);
+        if (response) {
+            status = parse_login_response_status(response, response_size);
+            if (status == 0) {
+                /* Target correctly rejected the invalid parameter */
+                rejected_count++;
+            }
+            free(response);
+            response = NULL;
+        }
+        free(pdu);
+        pdu = NULL;
+    }
+
+    /* Evaluate test result */
+    if (test_count == 0) {
+        report_set_result(report, TEST_ERROR, "Failed to construct test PDUs");
+        return TEST_ERROR;
+    }
+
+    if (rejected_count == 0) {
+        snprintf(msg, sizeof(msg),
+                 "Target did not reject any invalid parameters (%d/%d tests)",
+                 rejected_count, test_count);
+        report_set_result(report, TEST_FAIL, msg);
+        return TEST_FAIL;
+    }
+
+    if (rejected_count < test_count) {
+        snprintf(msg, sizeof(msg),
+                 "Target accepted some invalid parameters (%d/%d rejected)",
+                 rejected_count, test_count);
+        report_set_result(report, TEST_FAIL, msg);
+        return TEST_FAIL;
+    }
+
+    snprintf(msg, sizeof(msg), "Target correctly rejected all %d invalid parameter tests", test_count);
+    report_set_result(report, TEST_PASS, msg);
+    return TEST_PASS;
 }
 
 /* TL-004: Multiple Login Attempts */
