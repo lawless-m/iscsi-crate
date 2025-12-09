@@ -3,12 +3,13 @@ iSCSI Test Runner
 =========================================
 
 Environment:
-  Commit: 042b82b9536eed1164a96662c7749e5b56a4b747 (042b82b Merge branch 'master' of https://github.com/lawless-m/iscsi-crate)
+  Commit: 8e79a3e79d2aa56e43a90d997a4195defc7cfcbb (8e79a3e fix: Build test suite in docker-setup-vsprod.sh)
   Branch: master
-  OS: Linux b8eb7da21659 5.10.0-34-amd64 #1 SMP Debian 5.10.234-1 (2025-02-24) x86_64 GNU/Linux
-  Date: 2025-12-09 09:42:18 UTC
+  OS: Linux b430adacc41a 5.10.0-34-amd64 #1 SMP Debian 5.10.234-1 (2025-02-24) x86_64 GNU/Linux
+  Date: 2025-12-09 23:00:56 UTC
 
-Starting iSCSI target...
+Stopping any existing iSCSI target...
+Starting iSCSI target with latest code...
 Target is ready
 
 Running: ./simple_test iscsi://127.0.0.1:3261/iqn.2025-12.local:storage.memory-disk/0
