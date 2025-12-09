@@ -120,9 +120,10 @@ IMPORTANT: This is feature implementation, not bug fixing.
 - Update documentation if needed
 
 TOOLS AND ENVIRONMENT:
-- You can install debugging tools if needed: apt-get update && apt-get install -y <tool>
+- Install debugging tools if needed: ./install-debug-tools.sh (handles permissions gracefully)
+- Or install manually: apt-get update && apt-get install -y <tool>
 - Already available: strace, inotify-tools, gcc, make, cargo, git
-- Useful tools you can install: tcpdump, tshark, gdb, valgrind, hexdump
+- Additional tools available: tcpdump, tshark, gdb, valgrind, hexdump
 - The environment is Debian-based headless Docker container with root access
 
 Steps:
