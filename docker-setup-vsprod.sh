@@ -89,7 +89,14 @@ USER claude
 CMD ["/bin/bash"]
 DOCKERFILE
 
-# 6. Display instructions
+# 6. Create symlinks for easy access to scripts
+echo "Creating symlinks..."
+cd "$WORK_DIR"
+ln -sf repo/run-auto-fix-vsprod.sh .
+ln -sf repo/run-implement-vsprod.sh .
+ln -sf repo/docker-setup-vsprod.sh .
+
+# 7. Display instructions
 echo ""
 echo "========================================="
 echo "Setup Complete!"
