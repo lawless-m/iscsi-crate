@@ -15,11 +15,17 @@ echo "========================================="
 echo "Validating tests against TGTD reference implementation..."
 echo
 
-# Check if TGTD is available
+# Check if TGTD is available, auto-install if missing
 if ! command -v tgtd &> /dev/null; then
-    echo "ERROR: tgtd not found. Install with:"
-    echo "  sudo apt-get install tgt"
-    exit 2
+    echo "tgtd not found. Installing..."
+    export DEBIAN_FRONTEND=noninteractive
+    sudo apt-get update -qq 2>/dev/null || true
+    sudo apt-get install -y -qq tgt 2>/dev/null || {
+        echo "ERROR: Failed to install tgt"
+        echo "Manual install: sudo apt-get install tgt"
+        exit 2
+    }
+    echo "tgt installed successfully"
 fi
 
 # Create TGTD config
