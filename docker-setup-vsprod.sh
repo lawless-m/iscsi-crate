@@ -35,12 +35,19 @@ else
     cd repo
 fi
 
-# 4. Configure git for commits
+# 4. Build test suite
+echo "Building test suite..."
+cd "$WORK_DIR/repo/iscsi-test-suite"
+make clean
+make
+
+# 5. Configure git for commits
 echo "Configuring git..."
+cd "$WORK_DIR/repo"
 git config user.name "Claude Code Auto-Fixer"
 git config user.email "noreply@anthropic.com"
 
-# 5. Build the Docker image
+# 6. Build the Docker image
 echo "Building Docker image..."
 cd "$WORK_DIR/repo"
 docker build -t $IMAGE_NAME -f - . <<'DOCKERFILE'
@@ -104,7 +111,7 @@ USER claude
 CMD ["/bin/bash"]
 DOCKERFILE
 
-# 6. Create symlinks for easy access to scripts
+# 7. Create symlinks for easy access to scripts
 echo "Creating symlinks..."
 cd "$WORK_DIR"
 ln -sf repo/run-auto-fix-vsprod.sh .
@@ -113,7 +120,7 @@ ln -sf repo/docker-setup-vsprod.sh .
 ln -sf repo/test-tgtd.sh .
 ln -sf repo/test-rust.sh .
 
-# 7. Display instructions
+# 8. Display instructions
 echo ""
 echo "========================================="
 echo "Setup Complete!"
