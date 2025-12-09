@@ -21,11 +21,11 @@ if [ ! -d "$WORK_DIR/repo" ]; then
     exit 1
 fi
 
-# Run tests against TGTD in Docker
-docker run --rm \
+# Run tests against TGTD in Docker (as root for tgtd access)
+docker run --rm --user root \
     -v $WORK_DIR/repo:/repo \
     $IMAGE_NAME \
-    /bin/bash -c "cd /repo && sudo timeout 60 ./validate-against-tgtd.sh $MODE"
+    /bin/bash -c "cd /repo && timeout 60 ./validate-against-tgtd.sh $MODE"
 
 EXIT_CODE=$?
 
