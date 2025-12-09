@@ -23,18 +23,26 @@ int main(int argc, char *argv[]) {
 
     url = argv[1];
     printf("Simple iSCSI Target Test\n");
+    fflush(stdout);
     printf("========================\n");
+    fflush(stdout);
     printf("Target: %s\n\n", url);
+    fflush(stdout);
 
     /* Parse URL */
+    printf("Parsing URL...\n");
+    fflush(stdout);
     iscsi_url = iscsi_parse_full_url(NULL, url);
     if (!iscsi_url) {
         fprintf(stderr, "ERROR: Invalid URL\n");
         return 2;
     }
+    printf("URL parsed successfully\n");
+    fflush(stdout);
 
     /* Create context */
     printf("[1/5] Creating iSCSI context...\n");
+    fflush(stdout);
     iscsi = iscsi_create_context("iqn.2025-12.test:simple-tester");
     if (!iscsi) {
         fprintf(stderr, "  FAIL: Could not create iSCSI context\n");
@@ -42,16 +50,22 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     printf("  PASS\n");
+    fflush(stdout);
     tests_passed++;
 
     /* Set parameters */
+    printf("Setting target name to: %s\n", iscsi_url->target);
+    fflush(stdout);
     iscsi_set_targetname(iscsi, iscsi_url->target);
     iscsi_set_session_type(iscsi, ISCSI_SESSION_NORMAL);
-    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE_CRC32C);
+    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE);
 
     /* Connect */
-    printf("[2/5] Connecting to target...\n");
+    printf("[2/5] Connecting to target at %s...\n", iscsi_url->portal);
+    fflush(stdout);
     ret = iscsi_full_connect_sync(iscsi, iscsi_url->portal, iscsi_url->lun);
+    printf("Connect returned: %d\n", ret);
+    fflush(stdout);
     if (ret != 0) {
         fprintf(stderr, "  FAIL: Connection failed: %s\n", iscsi_get_error(iscsi));
         iscsi_destroy_context(iscsi);

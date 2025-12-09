@@ -153,7 +153,7 @@ static test_result_t test_param_negotiation(struct iscsi_context *unused_iscsi,
     }
 
     /* Set specific parameter values to negotiate */
-    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE_CRC32C);
+    iscsi_set_header_digest(iscsi, ISCSI_HEADER_DIGEST_NONE);
 
     ret = iscsi_connect_target(iscsi, config);
     if (ret != 0) {
