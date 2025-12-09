@@ -475,7 +475,14 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
             IscsiError::Scsi("Device lock poisoned".to_string())
         })?;
 
-        ScsiHandler::handle_command(&cmd.cdb, &*device_guard, None)?
+        let resp = ScsiHandler::handle_command(&cmd.cdb, &*device_guard, None)?;
+
+        if !resp.data.is_empty() {
+            log::debug!("SCSI command returned {} bytes, first 16: {:02x?}",
+                        resp.data.len(), &resp.data[..resp.data.len().min(16)]);
+        }
+
+        resp
     };
 
     // Build response PDU(s)
@@ -487,10 +494,6 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         let mut offset = 0u32;
         let mut data_sn = 0u32;
 
-        // StatSN should only be valid for the final PDU (with F and S bits set)
-        // For non-final PDUs, StatSN is reserved
-        let stat_sn = session.next_stat_sn();
-
         log::debug!("Large read: total_data={} bytes, max_data_seg={} bytes, will send {} PDUs",
                     response.data.len(), max_data_seg, (response.data.len() + max_data_seg - 1) / max_data_seg);
 
@@ -501,11 +504,12 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
             let chunk = response.data[offset as usize..offset as usize + chunk_size].to_vec();
 
-            log::debug!("Sending Data-In PDU: offset={}, chunk_size={}, is_final={}, data_sn={}",
-                        offset, chunk_size, is_final, data_sn);
+            log::debug!("Sending Data-In PDU: offset={}, chunk_size={}, is_final={}, data_sn={}, first 16 bytes: {:02x?}",
+                        offset, chunk_size, is_final, data_sn, &chunk[..chunk.len().min(16)]);
 
-            // StatSN is only valid for final PDU; for non-final PDUs use 0
-            let pdu_stat_sn = if is_final { stat_sn } else { 0 };
+            // StatSN should only be incremented for the final PDU (with F and S bits set)
+            // For non-final PDUs, StatSN is reserved and set to 0
+            let pdu_stat_sn = if is_final { session.next_stat_sn() } else { 0 };
 
             let data_in = IscsiPdu::scsi_data_in(
                 cmd.itt,
