@@ -130,21 +130,33 @@ Steps:
 2. Examine existing code to understand patterns and conventions
 3. Implement the feature following the existing style
 4. Test your implementation: ./run-tests.sh full
-5. Verify the tests now pass (or new tests are implemented correctly)
+5. **CRITICAL:** Check the exit code from run-tests.sh:
+   - Exit code 0 = tests passed ✅
+   - Exit code 1 = tests failed ❌
+   - Exit code 124 = tests timed out ❌
+   - Any non-zero exit code = FAILURE
 
-6. Based on results:
+6. Based on test results:
 
-   **If implementation is complete and tests pass:**
+   **ONLY close the issue if ALL of these are true:**
+   - Implementation is complete
+   - Tests pass with exit code 0
+   - No timeouts occurred
+   - No regressions introduced
+
+   **If tests pass (exit code 0):**
    a. Commit your changes with a descriptive commit message
    b. Push to GitHub: git push origin master
    c. Close the issue: gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implemented: [brief explanation]"
 
-   **If implementation is incomplete or tests fail:**
-   a. Commit your progress with a descriptive commit message
-   b. Push to GitHub: git push origin master
-   c. LEAVE THE ISSUE OPEN - Add a comment documenting:
+   **If tests fail, timeout, or exit with non-zero code:**
+   a. DO NOT claim success
+   b. Commit your progress if meaningful work was done
+   c. Push to GitHub: git push origin master
+   d. LEAVE THE ISSUE OPEN - Add a comment documenting:
       - What you implemented
-      - What's working and what's not
+      - Why tests failed (exit code, timeout, specific failures)
+      - What needs to be fixed
       - Specific next steps for the next iteration
       Use: gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "Your progress update"
 
@@ -152,6 +164,9 @@ Steps:
    a. DO NOT commit anything
    b. LEAVE THE ISSUE OPEN
    c. Add a comment explaining what you investigated
+
+IMPORTANT: Exit code 124 means TIMEOUT - the tests hung. This is a critical failure.
+Do NOT close issues when tests timeout. This indicates a serious bug (infinite loop, deadlock, etc.).
 EOF
 )
 
