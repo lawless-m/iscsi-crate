@@ -119,6 +119,7 @@ if command -v claude &> /dev/null; then
     # Build claude command with options
     CLAUDE_OPTS=(
         --model "$MODEL"
+        --verbose
         --append-system-prompt "You are fixing GitHub issue #$ISSUE_NUM in an automated workflow. Be concise and focused."
     )
 
@@ -131,34 +132,20 @@ if command -v claude &> /dev/null; then
         fi
     fi
 
-    # Invoke claude with the prompt (unbuffered output)
+    # Invoke claude with the prompt (direct output, no buffering)
     echo "========================================="
     echo "Claude Code is now working on the fix..."
-    echo "This may take several minutes..."
     echo "Model: $MODEL"
     echo "Started at: $(date)"
     echo "========================================="
     echo
 
-    # Background progress indicator
-    (
-        sleep 30  # Wait 30 seconds before showing progress
-        while kill -0 $$ 2>/dev/null; do
-            echo "[$(date +%H:%M:%S)] Still working..."
-            sleep 30
-        done
-    ) &
-    PROGRESS_PID=$!
-
-    # Use stdbuf to disable buffering for real-time output
-    stdbuf -oL -eL claude "${CLAUDE_OPTS[@]}" "$PROMPT" 2>&1 | while IFS= read -r line; do
-        echo "$line"
-    done
-
-    CLAUDE_EXIT_CODE=${PIPESTATUS[0]}
-
-    # Kill progress indicator
-    kill $PROGRESS_PID 2>/dev/null || true
+    # Run Claude directly without output manipulation
+    # Let it output naturally in real-time
+    set +e  # Don't exit on error
+    claude "${CLAUDE_OPTS[@]}" "$PROMPT"
+    CLAUDE_EXIT_CODE=$?
+    set -e
 
     echo
     echo "========================================="
