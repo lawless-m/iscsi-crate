@@ -30,6 +30,7 @@ fi
 
 # Create TGTD config
 TGTD_CONFIG="/tmp/tgtd-$$.conf"
+sudo rm -f "$TGTD_CONFIG"
 cat <<'EOF' | sudo tee "$TGTD_CONFIG" > /dev/null
 <target iqn.2025-12.local:storage.tgtd-validation>
     backing-store /tmp/tgtd-disk.img
@@ -82,6 +83,7 @@ echo
 
 # Create test config for TGTD
 TGTD_TEST_CONFIG="/tmp/tgtd-test-config.toml"
+sudo rm -f "$TGTD_TEST_CONFIG"
 cat <<'EOF' | sudo tee "$TGTD_TEST_CONFIG" > /dev/null
 [target]
 portal = 127.0.0.1:3260
