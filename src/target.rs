@@ -370,18 +370,13 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
             drop(device_guard);
 
             let expected_data_len = transfer_length as usize * block_size as usize;
+            let bytes_received = pdu.data.len() as u32;
 
-            // Check if immediate data is present in this PDU
+            // Write immediate data if present
             if !pdu.data.is_empty() {
                 log::debug!(
                     "WRITE command with immediate data: ITT=0x{:08x}, LBA={}, {} bytes (expected {})",
                     cmd.itt, lba, pdu.data.len(), expected_data_len
-                );
-
-                // Write the immediate data
-                log::debug!(
-                    "Writing immediate data: LBA={}, {} bytes (blocks {}-{})",
-                    lba, pdu.data.len(), lba, lba + (pdu.data.len() as u64 / block_size as u64) - 1
                 );
 
                 let mut device_guard = device.lock().map_err(|_| {
@@ -405,57 +400,106 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
                         Some(&sense.to_bytes()),
                     )]);
                 }
+            }
 
-                // If this is the final PDU and all data has been received, send success response
-                if cmd.final_flag && pdu.data.len() == expected_data_len {
-                    log::debug!(
-                        "Write complete: ITT=0x{:08x}, {} bytes written",
-                        cmd.itt, pdu.data.len()
-                    );
-                    return Ok(vec![IscsiPdu::scsi_response(
-                        cmd.itt,
-                        session.next_stat_sn(),
-                        session.exp_cmd_sn,
-                        session.max_cmd_sn,
-                        pdu::scsi_status::GOOD,
-                        0,
-                        0,
-                        None,
-                    )]);
-                } else {
-                    // Store pending write for additional Data-Out PDUs
-                    // Start tracking from the end of the immediate data
-                    let bytes_received = pdu.data.len() as u32;
-                    session.pending_writes.insert(cmd.itt, PendingWrite {
-                        lba,
-                        transfer_length,
-                        block_size,
-                        bytes_received,
-                    });
-                    log::debug!(
-                        "Stored pending write for continuation: ITT=0x{:08x}, {} of {} bytes received",
-                        cmd.itt, bytes_received, expected_data_len
-                    );
-                }
-            } else {
-                // No immediate data, expect Data-Out PDUs
-                session.pending_writes.insert(cmd.itt, PendingWrite {
-                    lba,
-                    transfer_length,
-                    block_size,
-                    bytes_received: 0,
-                });
+            // If all data has been received, send success response
+            if bytes_received as usize == expected_data_len {
+                log::debug!(
+                    "Write complete: ITT=0x{:08x}, {} bytes written",
+                    cmd.itt, bytes_received
+                );
+                return Ok(vec![IscsiPdu::scsi_response(
+                    cmd.itt,
+                    session.next_stat_sn(),
+                    session.exp_cmd_sn,
+                    session.max_cmd_sn,
+                    pdu::scsi_status::GOOD,
+                    0,
+                    0,
+                    None,
+                )]);
+            }
+
+            // Need more data - generate TTT and store pending write
+            let ttt = session.next_target_transfer_tag();
+            let remaining_bytes = expected_data_len as u32 - bytes_received;
+
+            log::debug!(
+                "WRITE needs R2T: ITT=0x{:08x}, TTT=0x{:08x}, received={}, remaining={}, total={}",
+                cmd.itt, ttt, bytes_received, remaining_bytes, expected_data_len
+            );
+
+            // Store pending write
+            session.pending_writes.insert(cmd.itt, PendingWrite {
+                lba,
+                transfer_length,
+                block_size,
+                bytes_received,
+                ttt,
+                r2t_sn: 0,
+                lun: cmd.lun,
+            });
+
+            // Send R2T to request the remaining data
+            // RFC 3720: R2T requests data starting at buffer_offset (bytes already received)
+            // with desired_data_transfer_length being the remaining bytes needed
+            // We may need to send multiple R2Ts if remaining data > MaxBurstLength
+            let max_burst = session.params.max_burst_length;
+            let mut responses = Vec::new();
+            let mut offset = bytes_received;
+            let mut r2t_sn = 0u32;
+
+            while offset < expected_data_len as u32 {
+                let remaining = expected_data_len as u32 - offset;
+                let request_len = remaining.min(max_burst);
 
                 log::debug!(
-                    "Stored pending write: ITT=0x{:08x}, LBA={}, blocks={}, block_size={}",
-                    cmd.itt, lba, transfer_length, block_size
+                    "Sending R2T: ITT=0x{:08x}, TTT=0x{:08x}, R2TSN={}, offset={}, len={}",
+                    cmd.itt, ttt, r2t_sn, offset, request_len
                 );
+
+                let r2t = IscsiPdu::r2t(
+                    cmd.lun,
+                    cmd.itt,
+                    ttt,
+                    session.stat_sn, // StatSN is not incremented for R2T
+                    session.exp_cmd_sn,
+                    session.max_cmd_sn,
+                    r2t_sn,
+                    offset,
+                    request_len,
+                );
+                responses.push(r2t);
+
+                offset += request_len;
+                r2t_sn += 1;
+
+                // Only send up to max_outstanding_r2t R2Ts at a time
+                // For simplicity, we send all at once (most targets allow this)
+                if responses.len() >= session.params.max_outstanding_r2t as usize {
+                    break;
+                }
             }
+
+            // Update pending write with next R2T sequence number
+            if let Some(pending) = session.pending_writes.get_mut(&cmd.itt) {
+                pending.r2t_sn = r2t_sn;
+            }
+
+            return Ok(responses);
         }
 
-        // For write commands, we've handled immediate data or stored pending writes
-        // Return empty - responses will be sent when data is complete
-        return Ok(vec![]);
+        // For write commands with no transfer, send immediate success
+        return Ok(vec![IscsiPdu::scsi_response(
+            cmd.itt,
+            session.next_stat_sn(),
+            session.exp_cmd_sn,
+            session.max_cmd_sn,
+            pdu::scsi_status::GOOD,
+            0,
+            0,
+            None,
+        )]);
     }
 
     // Handle non-write commands (reads, inquiries, etc.)
@@ -556,8 +600,8 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
     let data_out = pdu.parse_scsi_data_out()?;
 
     log::debug!(
-        "SCSI Data-Out: ITT=0x{:08x}, DataSN={}, Offset={}, Len={}",
-        data_out.itt, data_out.data_sn, data_out.buffer_offset, data_out.data.len()
+        "SCSI Data-Out: ITT=0x{:08x}, TTT=0x{:08x}, DataSN={}, Offset={}, Len={}, Final={}",
+        data_out.itt, data_out.ttt, data_out.data_sn, data_out.buffer_offset, data_out.data.len(), data_out.final_flag
     );
 
     // Look up the pending write command
@@ -571,14 +615,16 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
     let pending = pending_write.unwrap();
     let block_size = pending.block_size;
     let transfer_length = pending.transfer_length;
+    let base_lba = pending.lba;
+    let total_expected = transfer_length * block_size;
 
     // Calculate the LBA for this chunk based on buffer_offset
-    // buffer_offset is the offset from the start of the transfer
-    let lba = pending.lba + (data_out.buffer_offset / block_size as u32) as u64;
+    // buffer_offset is the byte offset from the start of the transfer
+    let lba = base_lba + (data_out.buffer_offset as u64 / block_size as u64);
 
     log::debug!(
-        "Writing Data-Out: ITT=0x{:08x}, buffer_offset={}, LBA={}, {} bytes",
-        data_out.itt, data_out.buffer_offset, lba, data_out.data.len()
+        "Writing Data-Out: ITT=0x{:08x}, buffer_offset={}, LBA={}, {} bytes (base_lba={})",
+        data_out.itt, data_out.buffer_offset, lba, data_out.data.len(), base_lba
     );
 
     // Write the data
@@ -589,11 +635,12 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
     let write_result = device_guard.write(lba, &data_out.data, block_size);
     drop(device_guard);
 
-    // Update bytes received - should match buffer_offset + current data length
-    let expected_bytes = data_out.buffer_offset + data_out.data.len() as u32;
-    pending.bytes_received = expected_bytes;
-
-    let total_expected = transfer_length * block_size;
+    // Update bytes received - track the highest offset written
+    // This handles out-of-order Data-Out PDUs correctly
+    let end_offset = data_out.buffer_offset + data_out.data.len() as u32;
+    if end_offset > pending.bytes_received {
+        pending.bytes_received = end_offset;
+    }
 
     log::debug!(
         "Updated bytes received: {}/{} bytes",
@@ -610,17 +657,32 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
         }
     };
 
-    // If this is the final data PDU, send a response and clean up
-    if data_out.final_flag {
-        // Verify all data was received
-        if pending.bytes_received != total_expected {
-            log::warn!(
-                "Incomplete write: received {} bytes, expected {}",
-                pending.bytes_received, total_expected
-            );
-        }
+    // Check if all data has been received
+    // The final flag indicates the last PDU for this R2T sequence
+    // We complete when all expected bytes are received
+    if pending.bytes_received >= total_expected {
+        log::debug!(
+            "Write complete: ITT=0x{:08x}, {} bytes total",
+            data_out.itt, pending.bytes_received
+        );
 
         // Remove the pending write
+        session.pending_writes.remove(&data_out.itt);
+
+        let response = IscsiPdu::scsi_response(
+            data_out.itt,
+            session.next_stat_sn(),
+            session.exp_cmd_sn,
+            session.max_cmd_sn,
+            status,
+            0,
+            0,
+            sense.as_deref(),
+        );
+
+        Ok(vec![response])
+    } else if status != scsi_status::GOOD {
+        // Error occurred - remove pending write and send error response
         session.pending_writes.remove(&data_out.itt);
 
         let response = IscsiPdu::scsi_response(
