@@ -160,18 +160,33 @@ CRITICAL - ISSUE TYPE: TEST BUG (based on label: test-bug)
 This issue is labeled as "test-bug", which means TGTD validation showed the test itself is incorrect.
 
 WHAT TO FIX:
-- Fix the TEST CODE in iscsi-test-suite/ directory
+- Fix the TEST CODE in iscsi-test-suite/ directory to match TGTD behavior
 - DO NOT modify the Rust target code in src/ or examples/
 - The Rust target is likely correct; the test has wrong expectations or incorrect implementation
 
 WHY:
 - The test also fails against TGTD (reference iSCSI implementation)
 - This proves the test logic is flawed, not the Rust target
+- TGTD defines the de facto standard behavior for iSCSI implementations
+
+HOW TO FIX:
+1. Run the test against TGTD to understand what TGTD actually does
+2. Update test expectations to match TGTD's actual behavior
+3. If TGTD accepts something, test should verify acceptance (not rejection)
+4. If TGTD rejects something, test should verify rejection
+5. The goal is a WORKING test that validates real-world behavior
+
+ABSOLUTELY FORBIDDEN:
+- DO NOT just return TEST_SKIP - that's avoiding the problem, not fixing it
+- DO NOT skip tests unless they are genuinely impossible to implement
+- Skipping a test is admitting defeat - we need working tests, not disabled tests
+- If you can't figure out how to fix the test, document what you tried and leave it open
 
 WHERE TO LOOK:
 - Test implementation in iscsi-test-suite/src/
 - Test expectations and assertions
-- Compare against iSCSI RFC 3720 specification
+- TGTD validation output in the issue description
+- Compare against iSCSI RFC 3720 specification AND real-world TGTD behavior
 GUIDANCE
 )
 elif [ "$IS_TARGET_BUG" = true ]; then
