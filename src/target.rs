@@ -629,8 +629,8 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         }
 
         // RFC 3720: Response field indicates whether the target successfully processed the command
-        // Use 0x00 (Command Completed at Target) for all successful SCSI status values, including CHECK_CONDITION
-        // libiscsi parses sense data from the SCSI Response PDU when Response=0x00
+        // Use 0x00 (Command Completed at Target) for all SCSI status values
+        // libiscsi should parse sense data from the data segment for CHECK_CONDITION
         let response_code = 0; // Command Completed at Target
 
         // Include sense data in the response PDU per RFC 3720 Section 10.4.7.

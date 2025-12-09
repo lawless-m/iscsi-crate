@@ -568,16 +568,11 @@ impl IscsiPdu {
         pdu.specific[20..24].copy_from_slice(&residual_count.to_be_bytes());
 
         // Add sense data if provided
-        // Per RFC 3720 Section 10.4.7, the SCSI Response data segment contains:
-        // - Bytes 0-1: SenseLength (big-endian, number of sense data bytes)
-        // - Bytes 2+: Sense data (fixed format, 18 bytes, or descriptor format)
+        // Note: While RFC 3720 Section 10.4.7 specifies a SenseLength field,
+        // libiscsi expects just the raw sense data without the SenseLength header.
+        // This is a known compatibility issue with libiscsi implementations.
         if let Some(sense) = sense_data {
-            let mut full_data = Vec::new();
-            // Add 2-byte SenseLength field (big-endian)
-            full_data.extend_from_slice(&(sense.len() as u16).to_be_bytes());
-            // Add sense data bytes
-            full_data.extend_from_slice(sense);
-            pdu.data = full_data;
+            pdu.data = sense.to_vec();
             pdu.data_length = pdu.data.len() as u32;
         }
 
