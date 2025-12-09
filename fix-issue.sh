@@ -131,8 +131,42 @@ if command -v claude &> /dev/null; then
         fi
     fi
 
-    # Invoke claude with the prompt
-    claude "${CLAUDE_OPTS[@]}" "$PROMPT"
+    # Invoke claude with the prompt (unbuffered output)
+    echo "========================================="
+    echo "Claude Code is now working on the fix..."
+    echo "This may take several minutes..."
+    echo "Model: $MODEL"
+    echo "Started at: $(date)"
+    echo "========================================="
+    echo
+
+    # Background progress indicator
+    (
+        sleep 30  # Wait 30 seconds before showing progress
+        while kill -0 $$ 2>/dev/null; do
+            echo "[$(date +%H:%M:%S)] Still working..."
+            sleep 30
+        done
+    ) &
+    PROGRESS_PID=$!
+
+    # Use stdbuf to disable buffering for real-time output
+    stdbuf -oL -eL claude "${CLAUDE_OPTS[@]}" "$PROMPT" 2>&1 | while IFS= read -r line; do
+        echo "$line"
+    done
+
+    CLAUDE_EXIT_CODE=${PIPESTATUS[0]}
+
+    # Kill progress indicator
+    kill $PROGRESS_PID 2>/dev/null || true
+
+    echo
+    echo "========================================="
+    echo "Claude Code finished with exit code: $CLAUDE_EXIT_CODE"
+    echo "Finished at: $(date)"
+    echo "========================================="
+
+    exit $CLAUDE_EXIT_CODE
 else
     # Fall back to just displaying the prompt
     echo "================================================================================
