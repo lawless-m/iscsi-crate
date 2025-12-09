@@ -1037,7 +1037,8 @@ mod tests {
         assert_eq!(parsed.opcode, opcode::NOP_OUT);
         assert_eq!(parsed.flags, flags::FINAL);
         assert_eq!(parsed.itt, 0x12345678);
-        assert_eq!(parsed.lun, 0x0001020304050607);
+        // NOP_OUT doesn't preserve LUN field - it's reserved per RFC 3720
+        assert_eq!(parsed.lun, 0);
     }
 
     #[test]

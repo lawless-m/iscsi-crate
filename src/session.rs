@@ -1082,7 +1082,7 @@ mod tests {
         let params = session.generate_response_params();
 
         // Check that required params are present
-        assert!(params.iter().any(|(k, v)| k == "SessionType" && v == "Normal"));
+        // Note: SessionType should NOT be in response (it's initiator-only per RFC 3720)
         assert!(params.iter().any(|(k, _)| k == "MaxRecvDataSegmentLength"));
         assert!(params.iter().any(|(k, _)| k == "MaxBurstLength"));
     }
