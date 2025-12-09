@@ -129,44 +129,15 @@ Steps:
 1. Read and understand the feature requirements
 2. Examine existing code to understand patterns and conventions
 3. Implement the feature following the existing style
-4. Test your implementation: ./run-tests.sh full
-5. **CRITICAL:** Check the exit code from run-tests.sh:
-   - Exit code 0 = tests passed ✅
-   - Exit code 1 = tests failed ❌
-   - Exit code 124 = tests timed out ❌
-   - Any non-zero exit code = FAILURE
+4. Commit your changes with a descriptive commit message
+5. Push to GitHub: git push origin master
 
-6. Based on test results:
+6. Add a comment to the issue summarizing what you implemented:
+   gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "Your implementation summary"
 
-   **ONLY close the issue if ALL of these are true:**
-   - Implementation is complete
-   - Tests pass with exit code 0
-   - No timeouts occurred
-   - No regressions introduced
-
-   **If tests pass (exit code 0):**
-   a. Commit your changes with a descriptive commit message
-   b. Push to GitHub: git push origin master
-   c. Close the issue: gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implemented: [brief explanation]"
-
-   **If tests fail, timeout, or exit with non-zero code:**
-   a. DO NOT claim success
-   b. Commit your progress if meaningful work was done
-   c. Push to GitHub: git push origin master
-   d. LEAVE THE ISSUE OPEN - Add a comment documenting:
-      - What you implemented
-      - Why tests failed (exit code, timeout, specific failures)
-      - What needs to be fixed
-      - Specific next steps for the next iteration
-      Use: gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "Your progress update"
-
-   **If you made no meaningful progress:**
-   a. DO NOT commit anything
-   b. LEAVE THE ISSUE OPEN
-   c. Add a comment explaining what you investigated
-
-IMPORTANT: Exit code 124 means TIMEOUT - the tests hung. This is a critical failure.
-Do NOT close issues when tests timeout. This indicates a serious bug (infinite loop, deadlock, etc.).
+IMPORTANT: DO NOT run tests yourself. DO NOT close the issue.
+The wrapper script will run tests and close the issue if they pass.
+Your job is only to implement, commit, push, and document what you did.
 EOF
 )
 
@@ -202,6 +173,38 @@ if command -v claude &> /dev/null; then
     echo "Claude Code finished with exit code: $CLAUDE_EXIT_CODE"
     echo "Finished at: $(date)"
     echo "========================================="
+
+    # Test gating: Only close issue if tests pass
+    if [ $CLAUDE_EXIT_CODE -eq 0 ]; then
+        echo ""
+        echo "Running tests to verify implementation..."
+        echo "========================================="
+
+        set +e
+        ./run-tests.sh full
+        TEST_EXIT_CODE=$?
+        set -e
+
+        echo ""
+        echo "========================================="
+        echo "Tests finished with exit code: $TEST_EXIT_CODE"
+        echo "========================================="
+        echo ""
+
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "✅ Tests passed! Closing issue #$ISSUE_NUM"
+            gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implementation complete and all tests pass. ✅"
+        elif [ $TEST_EXIT_CODE -eq 124 ]; then
+            echo "❌ Tests timed out (exit $TEST_EXIT_CODE). Leaving issue open."
+            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation introduced a timeout (exit code 124). Tests hung after 10 seconds. Leaving issue open for debugging."
+        else
+            echo "❌ Tests failed (exit $TEST_EXIT_CODE). Leaving issue open."
+            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation complete but tests failed with exit code $TEST_EXIT_CODE. Leaving issue open for fixes."
+        fi
+    else
+        echo "⚠️ Claude Code did not complete successfully (exit $CLAUDE_EXIT_CODE)"
+        echo "Leaving issue #$ISSUE_NUM open."
+    fi
 
     exit $CLAUDE_EXIT_CODE
 else
