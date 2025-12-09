@@ -935,11 +935,11 @@ mod tests {
         assert!(response.sense.is_some());
         let sense = response.sense.unwrap();
         assert_eq!(sense.sense_key, sense_key::ILLEGAL_REQUEST);
-        assert_eq!(sense.asc, asc::INVALID_FIELD_IN_CDB);
+        assert_eq!(sense.asc, asc::INVALID_COMMAND_OPERATION_CODE);
         // Verify sense data serialization
         let sense_bytes = sense.to_bytes();
         assert_eq!(sense_bytes[2], sense_key::ILLEGAL_REQUEST);
-        assert_eq!(sense_bytes[12], asc::INVALID_FIELD_IN_CDB);
+        assert_eq!(sense_bytes[12], asc::INVALID_COMMAND_OPERATION_CODE);
     }
 
     #[test]
