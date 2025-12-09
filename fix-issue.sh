@@ -79,8 +79,17 @@ PREVIOUS_ATTEMPTS=""
 if [ -n "$ITERATION" ] && [ "$ITERATION" -gt 1 ]; then
     echo "Gathering context from previous attempts..."
 
-    # Look for WIP commits from previous iterations
-    WIP_COMMITS=$(git log --oneline --grep="WIP: Attempted fix iteration" -5 2>/dev/null || echo "")
+    # Check if WIP branch exists for this issue
+    WIP_BRANCH="auto-fix-wip/issue-${ISSUE_NUM}"
+    WIP_COMMITS=""
+
+    if git show-ref --verify --quiet "refs/remotes/origin/$WIP_BRANCH"; then
+        # Fetch latest from WIP branch
+        git fetch origin "$WIP_BRANCH" 2>/dev/null || true
+
+        # Look for WIP commits from previous iterations in the WIP branch
+        WIP_COMMITS=$(git log --oneline "origin/$WIP_BRANCH" --grep="WIP: Attempted fix iteration" -5 2>/dev/null || echo "")
+    fi
 
     if [ -n "$WIP_COMMITS" ]; then
         PREVIOUS_ATTEMPTS=$(cat <<ATTEMPTS
@@ -91,12 +100,15 @@ PREVIOUS ATTEMPTS (You have tried fixing this before):
 
 This is attempt #$ITERATION to fix this issue. Previous attempts have failed.
 
+Failed attempts are tracked in branch: $WIP_BRANCH
+
 Recent failed attempts:
 $WIP_COMMITS
 
-IMPORTANT: Review what was tried before by examining these commits:
-  git show <commit-hash>
-  git diff <commit-hash>~1..<commit-hash>
+IMPORTANT: Review what was tried before by examining these commits from the WIP branch:
+  git fetch origin $WIP_BRANCH
+  git show origin/$WIP_BRANCH
+  git log -p origin/$WIP_BRANCH
 
 DO NOT repeat the same approach. Try a different strategy:
 - If previous attempts modified PDU encoding, consider the PDU decoding side

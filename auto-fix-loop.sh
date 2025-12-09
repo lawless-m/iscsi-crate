@@ -70,7 +70,26 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     # Before attempting fix, check if there are uncommitted changes from previous attempt
     if [ $iteration -gt 1 ]; then
         if [ -n "$(git status --short | grep -v '^??')" ]; then
-            echo "Committing previous failed attempt #$((iteration - 1))..."
+            echo "Committing previous failed attempt #$((iteration - 1)) to WIP branch..."
+
+            # Create/switch to WIP branch for failed attempts
+            WIP_BRANCH="auto-fix-wip/issue-${ISSUE_NUM}"
+
+            # Stash changes temporarily
+            git stash push -m "WIP iteration $((iteration - 1))" || true
+
+            # Create branch from master if it doesn't exist, or checkout if it does
+            if git show-ref --verify --quiet "refs/heads/$WIP_BRANCH"; then
+                git checkout "$WIP_BRANCH"
+                git merge master --no-edit || true
+            else
+                git checkout -b "$WIP_BRANCH" master
+            fi
+
+            # Apply the stashed changes
+            git stash pop || true
+
+            # Commit the failed attempt to WIP branch
             git add -A
             git commit -m "WIP: Attempted fix iteration $((iteration - 1)) - tests still failing
 
@@ -79,7 +98,15 @@ Previous attempt did not resolve the issue. Tests still show:
 - TI-008: Large Transfer Write - data mismatch
 
 This commit preserves the attempted changes for context." || true
-            git push origin master || true
+
+            # Push WIP branch (not master!)
+            git push -u origin "$WIP_BRANCH" || true
+
+            # Return to master for next attempt
+            git checkout master
+
+            # Clean up any remaining changes
+            git reset --hard HEAD
         fi
     fi
 
