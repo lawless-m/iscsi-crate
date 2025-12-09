@@ -46,7 +46,9 @@ echo
 # Attach strace and filter for repo file operations
 docker exec -u root "$CONTAINER_NAME" sh -c "
     strace -f -e trace=openat,read,write,stat,lstat -p $CLAUDE_PID 2>&1
-" | grep --line-buffered -E '/repo/(src|examples|Cargo)' | while IFS= read -r line; do
-    # Add timestamp and color
-    echo "[$(date +%H:%M:%S)] $line"
+" | while IFS= read -r line; do
+    # Only show repo-related operations
+    if echo "$line" | grep -q -E '/repo/(src|examples|Cargo)'; then
+        echo "[$(date +%H:%M:%S)] $line"
+    fi
 done
