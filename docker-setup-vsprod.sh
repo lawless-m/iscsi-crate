@@ -34,7 +34,7 @@ cd repo
 echo "Configuring git..."
 git config user.name "Claude Code Auto-Fixer"
 git config user.email "noreply@anthropic.com"
-git config credential.helper "!gh auth git-credential"
+git config credential.helper "gh auth git-credential"
 
 # 5. Build the Docker image
 echo "Building Docker image..."
