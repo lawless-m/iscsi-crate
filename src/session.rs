@@ -439,9 +439,12 @@ impl IscsiSession {
 
 <<<<<<< Updated upstream
     /// Apply an initiator parameter during negotiation
+<<<<<<< Updated upstream
     /// Returns an error if the parameter value is invalid per RFC 3720
 =======
     /// Apply an initiator parameter during negotiation with RFC 3720 validation
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
     fn apply_initiator_param(&mut self, key: &str, value: &str) -> ScsiResult<()> {
         match key {
@@ -462,6 +465,7 @@ impl IscsiSession {
                 };
             }
             "MaxRecvDataSegmentLength" => {
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
                 if let Ok(v) = value.parse::<u32>() {
 <<<<<<< Updated upstream
@@ -497,6 +501,20 @@ impl IscsiSession {
                     return Err(IscsiError::Protocol(
                         format!("Invalid MaxConnections value: {}", value),
                     ));
+=======
+                let v: u32 = value.parse()
+                    .map_err(|_| IscsiError::Protocol(format!("Invalid MaxRecvDataSegmentLength: {}", value)))?;
+                if v == 0 {
+                    return Err(IscsiError::Protocol("MaxRecvDataSegmentLength must be > 0".to_string()));
+                }
+                self.params.max_xmit_data_segment_length = v;
+            }
+            "MaxConnections" => {
+                let v: u32 = value.parse()
+                    .map_err(|_| IscsiError::Protocol(format!("Invalid MaxConnections: {}", value)))?;
+                if v == 0 {
+                    return Err(IscsiError::Protocol("MaxConnections must be >= 1".to_string()));
+>>>>>>> Stashed changes
                 }
             }
             "MaxBurstLength" => {
@@ -692,6 +710,7 @@ impl IscsiSession {
             }
             "DataDigest" => {
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
                 // RFC 3720: DataDigest must be "None" or "CRC32C"
                 if value == "None" || value.contains("CRC32C") {
                     self.params.data_digest = if value.contains("CRC32C") {
@@ -700,6 +719,8 @@ impl IscsiSession {
                         DigestType::None
                     };
 =======
+=======
+>>>>>>> Stashed changes
                 if value != "None" && !value.contains("CRC32C") {
                     return Err(IscsiError::Protocol(format!("DataDigest must be None or CRC32C, got: {}", value)));
                 }
