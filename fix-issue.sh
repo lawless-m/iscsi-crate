@@ -147,10 +147,27 @@ Steps:
 3. Identify why the Rust target is failing the test
 4. Fix the RUST CODE (not the test code)
 5. Test the fix by running: ./run-tests.sh
-6. If tests pass:
+
+6. Based on test results:
+
+   **If ALL tests pass:**
    a. Commit your changes with a descriptive commit message
-   b. Push to GitHub with: git push origin master
-   c. Close the issue with: gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Fixed: [brief explanation]"
+   b. Push to GitHub: git push origin master
+   c. Close the issue: gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Fixed: [brief explanation]"
+
+   **If tests STILL FAIL (but you made progress):**
+   a. Commit your changes with a descriptive commit message
+   b. Push to GitHub: git push origin master
+   c. LEAVE THE ISSUE OPEN - Add a comment documenting:
+      - What you tried and why
+      - What you learned from the attempt
+      - Specific next steps to try in the next iteration
+      Use: gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "Your analysis and next steps"
+
+   **If you made no meaningful changes:**
+   a. DO NOT commit anything
+   b. LEAVE THE ISSUE OPEN
+   c. Add a comment explaining what you investigated
 EOF
 )
 
