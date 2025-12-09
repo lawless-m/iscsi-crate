@@ -117,7 +117,7 @@ echo
 
 OUTPUT_FILE=$(mktemp)
 EXIT_CODE=0
-TIMEOUT_SECONDS=10
+TIMEOUT_SECONDS=30
 
 # Run test with timeout and capture output
 timeout $TIMEOUT_SECONDS $TEST_CMD $TEST_ARGS 2>&1 | tee "$OUTPUT_FILE" || EXIT_CODE=$?

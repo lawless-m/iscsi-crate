@@ -106,8 +106,10 @@ fn handle_connection<D: ScsiBlockDevice>(
     let local_addr = stream.local_addr().map_err(IscsiError::Io)?;
     // Set blocking mode and timeouts for the connection
     stream.set_nonblocking(false).map_err(IscsiError::Io)?;
-    stream.set_read_timeout(Some(Duration::from_secs(300))).map_err(IscsiError::Io)?;
-    stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(IscsiError::Io)?;
+    // During login phase, use a shorter timeout to detect stalled logins quickly
+    // This prevents resource leaks from clients that initiate login but never complete it
+    stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(IscsiError::Io)?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(IscsiError::Io)?;
 
     let mut session = IscsiSession::new();
     session.params.target_name = target_name.to_string();
@@ -140,6 +142,7 @@ fn handle_connection<D: ScsiBlockDevice>(
 
         // Process PDU based on session state
         let target_address = local_addr.to_string();
+        let prev_state = session.state.clone();
         let response = match session.state {
             SessionState::Free | SessionState::SecurityNegotiation | SessionState::LoginOperationalNegotiation => {
                 handle_login_phase(&mut session, &pdu, target_name, &target_address)?
@@ -156,6 +159,13 @@ fn handle_connection<D: ScsiBlockDevice>(
                 break;
             }
         };
+
+        // Adjust timeout when transitioning to FullFeaturePhase
+        if prev_state != SessionState::FullFeaturePhase && session.state == SessionState::FullFeaturePhase {
+            log::info!("Session entered FullFeaturePhase, increasing timeout");
+            stream.set_read_timeout(Some(Duration::from_secs(300))).ok();
+            stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
+        }
 
         // Send response(s)
         for resp_pdu in response {
