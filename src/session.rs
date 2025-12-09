@@ -236,7 +236,7 @@ impl IscsiSession {
     }
 
     /// Create session from login request
-    pub fn from_login_request(login: &LoginRequest, target_name: &str) -> Self {
+    pub fn from_login_request(login: &LoginRequest, target_name: &str) -> ScsiResult<Self> {
         let mut session = IscsiSession::new();
         session.isid = login.isid;
         session.cid = login.cid;
@@ -248,7 +248,7 @@ impl IscsiSession {
 
         // Parse initiator parameters
         for (key, value) in &login.parameters {
-            session.apply_initiator_param(key, value);
+            session.apply_initiator_param(key, value)?;
         }
 
         // Set initial state based on CSG
@@ -259,7 +259,7 @@ impl IscsiSession {
             _ => SessionState::SecurityNegotiation,
         };
 
-        session
+        Ok(session)
     }
 
     /// Set authentication configuration for this session
@@ -438,7 +438,8 @@ impl IscsiSession {
     }
 
     /// Apply an initiator parameter during negotiation
-    fn apply_initiator_param(&mut self, key: &str, value: &str) {
+    /// Returns an error if the parameter value is invalid per RFC 3720
+    fn apply_initiator_param(&mut self, key: &str, value: &str) -> ScsiResult<()> {
         match key {
             "InitiatorName" => {
                 self.params.initiator_name = value.to_string();
@@ -459,67 +460,162 @@ impl IscsiSession {
             }
             "MaxRecvDataSegmentLength" => {
                 if let Ok(v) = value.parse::<u32>() {
+                    // RFC 3720: MaxRecvDataSegmentLength must be >= 512 (minimum allowed)
+                    // However, must be > 0 to be valid. Some implementations use 512 as minimum
+                    if v == 0 {
+                        return Err(IscsiError::Protocol(
+                            "MaxRecvDataSegmentLength cannot be 0".to_string(),
+                        ));
+                    }
                     // This is initiator's max recv, which is our max xmit
                     self.params.max_xmit_data_segment_length = v;
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid MaxRecvDataSegmentLength value: {}", value),
+                    ));
+                }
+            }
+            "MaxConnections" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    // RFC 3720: MaxConnections must be >= 1
+                    if v == 0 {
+                        return Err(IscsiError::Protocol(
+                            "MaxConnections cannot be 0 (must be >= 1)".to_string(),
+                        ));
+                    }
+                    // Store but don't use yet - just validate
+                    log::debug!("MaxConnections negotiated: {}", v);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid MaxConnections value: {}", value),
+                    ));
                 }
             }
             "MaxBurstLength" => {
                 if let Ok(v) = value.parse::<u32>() {
                     self.params.max_burst_length = v.min(self.params.max_burst_length);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid MaxBurstLength value: {}", value),
+                    ));
                 }
             }
             "FirstBurstLength" => {
                 if let Ok(v) = value.parse::<u32>() {
                     self.params.first_burst_length = v.min(self.params.first_burst_length);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid FirstBurstLength value: {}", value),
+                    ));
                 }
             }
             "DefaultTime2Wait" => {
                 if let Ok(v) = value.parse::<u16>() {
                     self.params.default_time2wait = v.max(self.params.default_time2wait);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid DefaultTime2Wait value: {}", value),
+                    ));
                 }
             }
             "DefaultTime2Retain" => {
                 if let Ok(v) = value.parse::<u16>() {
                     self.params.default_time2retain = v.min(self.params.default_time2retain);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid DefaultTime2Retain value: {}", value),
+                    ));
                 }
             }
             "MaxOutstandingR2T" => {
                 if let Ok(v) = value.parse::<u32>() {
                     self.params.max_outstanding_r2t = v.min(self.params.max_outstanding_r2t);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid MaxOutstandingR2T value: {}", value),
+                    ));
                 }
             }
             "DataPDUInOrder" => {
-                self.params.data_pdu_in_order = value == "Yes";
+                if value == "Yes" || value == "No" {
+                    self.params.data_pdu_in_order = value == "Yes";
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid DataPDUInOrder value: {} (must be Yes or No)", value),
+                    ));
+                }
             }
             "DataSequenceInOrder" => {
-                self.params.data_sequence_in_order = value == "Yes";
+                if value == "Yes" || value == "No" {
+                    self.params.data_sequence_in_order = value == "Yes";
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid DataSequenceInOrder value: {} (must be Yes or No)", value),
+                    ));
+                }
             }
             "ErrorRecoveryLevel" => {
                 if let Ok(v) = value.parse::<u8>() {
+                    // RFC 3720: ErrorRecoveryLevel must be 0, 1, or 2
+                    if v > 2 {
+                        return Err(IscsiError::Protocol(
+                            format!("Invalid ErrorRecoveryLevel: {} (must be 0-2)", v),
+                        ));
+                    }
                     self.params.error_recovery_level = v.min(self.params.error_recovery_level);
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid ErrorRecoveryLevel value: {}", value),
+                    ));
                 }
             }
             "ImmediateData" => {
-                // AND operation: only true if both want it
-                self.params.immediate_data = self.params.immediate_data && (value == "Yes");
+                if value == "Yes" || value == "No" {
+                    // AND operation: only true if both want it
+                    self.params.immediate_data = self.params.immediate_data && (value == "Yes");
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid ImmediateData value: {} (must be Yes or No)", value),
+                    ));
+                }
             }
             "InitialR2T" => {
-                // OR operation: true if either wants it
-                self.params.initial_r2t = self.params.initial_r2t || (value == "Yes");
+                if value == "Yes" || value == "No" {
+                    // OR operation: true if either wants it
+                    self.params.initial_r2t = self.params.initial_r2t || (value == "Yes");
+                } else {
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid InitialR2T value: {} (must be Yes or No)", value),
+                    ));
+                }
             }
             "HeaderDigest" => {
-                self.params.header_digest = if value.contains("CRC32C") {
-                    DigestType::CRC32C
+                // RFC 3720: HeaderDigest must be "None" or "CRC32C"
+                if value == "None" || value.contains("CRC32C") {
+                    self.params.header_digest = if value.contains("CRC32C") {
+                        DigestType::CRC32C
+                    } else {
+                        DigestType::None
+                    };
                 } else {
-                    DigestType::None
-                };
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid HeaderDigest value: {} (must be None or CRC32C)", value),
+                    ));
+                }
             }
             "DataDigest" => {
-                self.params.data_digest = if value.contains("CRC32C") {
-                    DigestType::CRC32C
+                // RFC 3720: DataDigest must be "None" or "CRC32C"
+                if value == "None" || value.contains("CRC32C") {
+                    self.params.data_digest = if value.contains("CRC32C") {
+                        DigestType::CRC32C
+                    } else {
+                        DigestType::None
+                    };
                 } else {
-                    DigestType::None
-                };
+                    return Err(IscsiError::Protocol(
+                        format!("Invalid DataDigest value: {} (must be None or CRC32C)", value),
+                    ));
+                }
             }
             // Authentication parameters - handled separately in handle_chap_auth()
             "AuthMethod" | "CHAP_A" | "CHAP_I" | "CHAP_C" | "CHAP_N" | "CHAP_R" => {
@@ -530,6 +626,7 @@ impl IscsiSession {
                 log::debug!("Ignoring unknown parameter: {}={}", key, value);
             }
         }
+        Ok(())
     }
 
     /// Generate target response parameters for login
@@ -623,7 +720,14 @@ impl IscsiSession {
         // Apply parameters from this login PDU
         log::debug!("Received {} login parameters: {:?}", login.parameters.len(), login.parameters);
         for (key, value) in &login.parameters {
-            self.apply_initiator_param(key, value);
+            if let Err(e) = self.apply_initiator_param(key, value) {
+                log::warn!("Invalid parameter {}={}: {}", key, value, e);
+                return self.create_login_reject(
+                    pdu.itt,
+                    pdu::login_status::INITIATOR_ERROR,
+                    0x07, // Invalid parameter in Login Request
+                );
+            }
         }
 
         // Validate target name for normal sessions
