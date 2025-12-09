@@ -34,38 +34,20 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo "========================================="
     echo
 
-    # Run tests
-    echo "Running tests ($TEST_MODE mode)..."
-    if ./run-tests.sh "$TEST_MODE"; then
-        echo
-        echo "========================================="
-        echo "SUCCESS! All tests passed!"
-        echo "========================================="
-        echo "Total iterations: $iteration"
-        exit 0
-    fi
-
-    # Tests failed - check for new issues
-    echo
-    echo "Tests failed. Checking for open issues..."
-
+    # Check for open issues FIRST before running tests
+    echo "Checking for open issues..."
     OPEN_ISSUES=$(gh issue list --repo lawless-m/iscsi-crate --state open --label test-failure --json number --jq '.[].number' 2>/dev/null || true)
     if [ -z "$OPEN_ISSUES" ]; then
         # Try without label filter
         OPEN_ISSUES=$(gh issue list --repo lawless-m/iscsi-crate --state open --search "Test Failure" --json number --jq '.[].number' 2>/dev/null | head -1 || true)
     fi
 
-    if [ -z "$OPEN_ISSUES" ]; then
-        echo "No open test failure issues found. This might be a transient failure."
-        echo "Retrying in iteration $((iteration + 1))..."
-        sleep 2
-        continue
-    fi
-
-    # Fix the first open issue
-    ISSUE_NUM=$(echo "$OPEN_ISSUES" | head -1)
-    echo "Found open issue: #$ISSUE_NUM"
-    echo
+    if [ -n "$OPEN_ISSUES" ]; then
+        # Found open issue - try to fix it
+        ISSUE_NUM=$(echo "$OPEN_ISSUES" | head -1)
+        echo "Found open issue: #$ISSUE_NUM"
+        echo "Attempting fix before running tests..."
+        echo
 
     # Before attempting fix, check if there are uncommitted changes from previous attempt
     if [ $iteration -gt 1 ]; then
@@ -110,13 +92,29 @@ This commit preserves the attempted changes for context." || true
         fi
     fi
 
-    echo "Attempting automated fix (iteration $iteration)..."
+        echo "Attempting automated fix (iteration $iteration)..."
 
-    # Run fix with iteration context for full automation
-    if ./fix-issue.sh --model "$MODEL" --no-prompts --iteration "$iteration" "$ISSUE_NUM"; then
-        echo "Fix attempt completed"
+        # Run fix with iteration context for full automation
+        if ./fix-issue.sh --model "$MODEL" --no-prompts --iteration "$iteration" "$ISSUE_NUM"; then
+            echo "Fix attempt completed"
+        else
+            echo "Fix attempt failed - will retry on next iteration"
+        fi
     else
-        echo "Fix attempt failed - will retry on next iteration"
+        # No open issues found - run tests to verify everything is working
+        echo "No open issues found. Running tests to verify..."
+        if ./run-tests.sh "$TEST_MODE"; then
+            echo
+            echo "========================================="
+            echo "SUCCESS! All tests passed!"
+            echo "========================================="
+            echo "Total iterations: $iteration"
+            exit 0
+        else
+            echo
+            echo "Tests failed. New issue may be created by test suite."
+            echo "Will check for it on next iteration..."
+        fi
     fi
 
     # Brief pause before next iteration
