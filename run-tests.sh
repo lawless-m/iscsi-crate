@@ -215,18 +215,44 @@ else
 
             TGTD_CLEAN_OUTPUT=$(cat "$TGTD_OUTPUT_FILE" | sed 's/\x1b\[[0-9;]*m//g')
 
-            if [ $TGTD_EXIT_CODE -eq 0 ]; then
-                TGTD_STATUS="✅ PASSED"
-                TGTD_INTERPRETATION="**This is a TARGET BUG** - The test passes against TGTD (reference implementation), so the Rust target implementation is incorrect."
-                ISSUE_LABEL="target-bug"
-            elif [ $TGTD_EXIT_CODE -eq 124 ]; then
-                TGTD_STATUS="⏱️ TIMEOUT"
-                TGTD_INTERPRETATION="**This is likely a TEST BUG** - The test timed out against TGTD, indicating the test implementation has issues."
-                ISSUE_LABEL="test-bug"
+            # Determine label by checking if the specific failing test(s) pass or fail in TGTD
+            # If we have specific failed test names, check their status in TGTD output
+            if [ -n "$FAILED_TESTS" ]; then
+                # Check if the failing test(s) PASS in TGTD output
+                TGTD_TEST_PASSES=false
+                for TEST_ID in $(echo "$FAILED_TESTS" | tr ',' ' '); do
+                    if echo "$TGTD_CLEAN_OUTPUT" | grep -q "$TEST_ID.*\[PASS\]"; then
+                        TGTD_TEST_PASSES=true
+                        break
+                    fi
+                done
+
+                if [ "$TGTD_TEST_PASSES" = true ]; then
+                    # Failing test PASSES in TGTD = target bug
+                    TGTD_STATUS="✅ PASSED (for failing tests)"
+                    TGTD_INTERPRETATION="**This is a TARGET BUG** - The failing test(s) pass against TGTD (reference implementation), so the Rust target implementation is incorrect."
+                    ISSUE_LABEL="target-bug"
+                else
+                    # Failing test also FAILS in TGTD = test bug
+                    TGTD_STATUS="❌ FAILED (for failing tests)"
+                    TGTD_INTERPRETATION="**This is a TEST BUG** - The failing test(s) also fail against TGTD (reference implementation), so the test itself is incorrect, not the Rust target."
+                    ISSUE_LABEL="test-bug"
+                fi
             else
-                TGTD_STATUS="❌ FAILED"
-                TGTD_INTERPRETATION="**This is a TEST BUG** - The test also fails against TGTD (reference implementation), so the test itself is incorrect, not the Rust target."
-                ISSUE_LABEL="test-bug"
+                # Fallback to overall exit code if we don't have specific test names
+                if [ $TGTD_EXIT_CODE -eq 0 ]; then
+                    TGTD_STATUS="✅ PASSED"
+                    TGTD_INTERPRETATION="**This is a TARGET BUG** - The test passes against TGTD (reference implementation), so the Rust target implementation is incorrect."
+                    ISSUE_LABEL="target-bug"
+                elif [ $TGTD_EXIT_CODE -eq 124 ]; then
+                    TGTD_STATUS="⏱️ TIMEOUT"
+                    TGTD_INTERPRETATION="**This is likely a TEST BUG** - The test timed out against TGTD, indicating the test implementation has issues."
+                    ISSUE_LABEL="test-bug"
+                else
+                    TGTD_STATUS="❌ FAILED"
+                    TGTD_INTERPRETATION="**This is a TEST BUG** - The test also fails against TGTD (reference implementation), so the test itself is incorrect, not the Rust target."
+                    ISSUE_LABEL="test-bug"
+                fi
             fi
 
             TGTD_RESULT=$(cat <<EOF
