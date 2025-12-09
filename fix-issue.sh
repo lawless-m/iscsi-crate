@@ -141,6 +141,12 @@ IMPORTANT: This is a Rust iSCSI target implementation being tested by C test pro
 - Fix the RUST TARGET CODE in examples/ or src/ directories
 - The tests are validating that the Rust implementation follows the iSCSI RFC correctly
 
+TOOLS AND ENVIRONMENT:
+- You can install debugging tools if needed: apt-get update && apt-get install -y <tool>
+- Already available: strace, inotify-tools, gcc, make, cargo, git
+- Useful tools you can install: tcpdump, tshark, gdb, valgrind, hexdump
+- The environment is Debian-based headless Docker container with root access
+
 Steps:
 1. Read the test output and diagnostic information
 2. Examine the Rust target implementation (examples/simple_target.rs, src/)
