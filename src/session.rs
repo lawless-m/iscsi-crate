@@ -460,8 +460,12 @@ impl IscsiSession {
             }
             "MaxRecvDataSegmentLength" => {
                 if let Ok(v) = value.parse::<u32>() {
+<<<<<<< Updated upstream
                     // RFC 3720: MaxRecvDataSegmentLength must be >= 512 (minimum allowed)
                     // However, must be > 0 to be valid. Some implementations use 512 as minimum
+=======
+                    // RFC 3720: MaxRecvDataSegmentLength must be > 0
+>>>>>>> Stashed changes
                     if v == 0 {
                         return Err(IscsiError::Protocol(
                             "MaxRecvDataSegmentLength cannot be 0".to_string(),
