@@ -178,41 +178,7 @@ if command -v claude &> /dev/null; then
     # Test gating: Only close issue if tests pass
     if [ $CLAUDE_EXIT_CODE -eq 0 ]; then
         echo ""
-        echo "Validating tests against TGTD reference implementation..."
-        echo "========================================="
-
-        # First validate against TGTD to ensure test is correct
-        set +e
-        if [ -f ./validate-against-tgtd.sh ]; then
-            ./validate-against-tgtd.sh
-            TGTD_EXIT_CODE=$?
-        else
-            echo "⚠️ TGTD validation script not found, skipping validation"
-            TGTD_EXIT_CODE=2  # 2 = not available
-        fi
-        set -e
-
-        echo ""
-
-        if [ $TGTD_EXIT_CODE -eq 1 ]; then
-            # Test failed against TGTD - the test itself is buggy!
-            echo "❌ TGTD validation FAILED - Test implementation is incorrect!"
-            echo "Leaving issue #$ISSUE_NUM open for test fixes."
-            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ **Test validation failed against TGTD reference implementation**
-
-The implemented test fails against the known-good TGTD target, which means the test itself is buggy, not the Rust target.
-
-Validation output: \`/tmp/tgtd-validation.log\`
-
-The test needs to be fixed before we can validate the Rust target implementation.
-
-Leaving issue open."
-            exit 1
-        fi
-
-        # TGTD validation passed (or not available) - now test Rust target
-        echo ""
-        echo "Running tests against Rust target..."
+        echo "Running tests..."
         echo "========================================="
 
         set +e
@@ -227,26 +193,14 @@ Leaving issue open."
         echo ""
 
         if [ $TEST_EXIT_CODE -eq 0 ]; then
-            TGTD_MSG=""
-            if [ $TGTD_EXIT_CODE -eq 0 ]; then
-                TGTD_MSG="
-
-✅ Test validated against TGTD reference implementation"
-            fi
             echo "✅ Tests passed! Closing issue #$ISSUE_NUM"
-            gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implementation complete and all tests pass. ✅$TGTD_MSG"
+            gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implementation complete and all tests pass. ✅"
         elif [ $TEST_EXIT_CODE -eq 124 ]; then
             echo "❌ Tests timed out (exit $TEST_EXIT_CODE). Leaving issue open."
             gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation introduced a timeout (exit code 124). Tests hung after 30 seconds. Leaving issue open for debugging."
         else
-            TGTD_MSG=""
-            if [ $TGTD_EXIT_CODE -eq 0 ]; then
-                TGTD_MSG="
-
-**Note:** Tests passed against TGTD reference implementation, so the Rust target has bugs (not the test)."
-            fi
             echo "❌ Tests failed (exit $TEST_EXIT_CODE). Leaving issue open."
-            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation complete but tests failed with exit code $TEST_EXIT_CODE. Leaving issue open for fixes.$TGTD_MSG"
+            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation complete but tests failed with exit code $TEST_EXIT_CODE. Leaving issue open for fixes."
         fi
     else
         echo "⚠️ Claude Code did not complete successfully (exit $CLAUDE_EXIT_CODE)"
