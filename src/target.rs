@@ -491,12 +491,18 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         // For non-final PDUs, StatSN is reserved
         let stat_sn = session.next_stat_sn();
 
+        log::debug!("Large read: total_data={} bytes, max_data_seg={} bytes, will send {} PDUs",
+                    response.data.len(), max_data_seg, (response.data.len() + max_data_seg - 1) / max_data_seg);
+
         while offset < response.data.len() as u32 {
             let remaining = response.data.len() - offset as usize;
             let chunk_size = remaining.min(max_data_seg);
             let is_final = offset as usize + chunk_size >= response.data.len();
 
             let chunk = response.data[offset as usize..offset as usize + chunk_size].to_vec();
+
+            log::debug!("Sending Data-In PDU: offset={}, chunk_size={}, is_final={}, data_sn={}",
+                        offset, chunk_size, is_final, data_sn);
 
             // StatSN is only valid for final PDU; for non-final PDUs use 0
             let pdu_stat_sn = if is_final { stat_sn } else { 0 };

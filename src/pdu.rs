@@ -262,9 +262,13 @@ impl IscsiPdu {
 
         // Bytes 2-3: Reserved (opcode-specific)
         // Special case for SCSI Response: bytes 2-3 are Response and Status
+        // Special case for SCSI Data-In: byte 3 is Status if S bit is set
         if self.opcode == opcode::SCSI_RESPONSE {
             buf.push(self.specific[0]); // Response (byte 2)
             buf.push(self.specific[1]); // Status (byte 3)
+        } else if self.opcode == opcode::SCSI_DATA_IN && (self.flags & 0x01) != 0 {
+            buf.push(0); // Reserved (byte 2)
+            buf.push(self.specific[27]); // Status (byte 3) if S bit is set
         } else {
             buf.push(0);
             buf.push(0);
@@ -605,8 +609,8 @@ impl IscsiPdu {
         // pdu.specific[24..28] - residual count if needed
 
         if let Some(s) = status {
-            // Status byte goes in byte 3 of flags area (handled differently)
-            // Actually for Data-In, status is in specific[1] if S bit set
+            // Status byte goes in BHS byte 3 (not part of specific array)
+            // We store it in specific[27] temporarily and to_bytes() will move it
             pdu.specific[27] = s;
         }
 
