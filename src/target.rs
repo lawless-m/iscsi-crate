@@ -298,7 +298,7 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 ) -> ScsiResult<Vec<IscsiPdu>> {
     let cmd = pdu.parse_scsi_command()?;
 
-    log::info!(
+    log::warn!(
         "SCSI Command: CDB[0]=0x{:02x}, LUN=0x{:016x}, ITT=0x{:08x}, ExpLen={}, read={}, write={}, final={}, data_len={}",
         cmd.cdb[0], cmd.lun, cmd.itt, cmd.expected_data_length, cmd.read, cmd.write, cmd.final_flag, pdu.data.len()
     );
@@ -334,6 +334,7 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
     // Check command type
     let opcode = cmd.cdb[0];
+    log::debug!("Processing SCSI opcode 0x{:02x}", opcode);
     let is_sync_cache = opcode == 0x35 || opcode == 0x91;
     let is_write_cmd = matches!(opcode, 0x0a | 0x2a | 0x8a);
 
@@ -612,10 +613,11 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         if response.status == pdu::scsi_status::CHECK_CONDITION {
             if let Some(ref sd) = response.sense {
                 let sense_bytes = sd.to_bytes();
-                log::debug!(
+                log::info!(
                     "Sending CHECK CONDITION with sense data: sense_key=0x{:02x}, asc=0x{:02x}, ascq=0x{:02x}",
                     sd.sense_key, sd.asc, sd.ascq
                 );
+                log::debug!("Sense data bytes: {:02x?}", sense_bytes);
                 // Store the FULL sense data (including response code) for REQUEST SENSE
                 session.last_sense_data = Some(sense_bytes);
             } else {

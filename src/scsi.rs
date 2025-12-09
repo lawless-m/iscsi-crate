@@ -140,6 +140,7 @@ pub mod sense_key {
 /// Additional Sense Code (ASC) values
 pub mod asc {
     pub const NO_ADDITIONAL_SENSE: u8 = 0x00;
+    pub const INVALID_COMMAND_OPERATION_CODE: u8 = 0x20;
     pub const LBA_OUT_OF_RANGE: u8 = 0x21;
     pub const INVALID_FIELD_IN_CDB: u8 = 0x24;
     pub const LOGICAL_UNIT_NOT_SUPPORTED: u8 = 0x25;
@@ -196,9 +197,9 @@ impl SenseData {
         data
     }
 
-    /// Create sense data for invalid command
+    /// Create sense data for invalid/unsupported command opcode
     pub fn invalid_command() -> Self {
-        SenseData::new(sense_key::ILLEGAL_REQUEST, asc::INVALID_FIELD_IN_CDB, 0)
+        SenseData::new(sense_key::ILLEGAL_REQUEST, asc::INVALID_COMMAND_OPERATION_CODE, 0)
     }
 
     /// Create sense data for LBA out of range
