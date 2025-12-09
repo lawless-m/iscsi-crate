@@ -37,7 +37,7 @@ git config user.email "noreply@anthropic.com"
 
 # 5. Build the Docker image
 echo "Building Docker image..."
-cd /home/matt/Git/iscsi-crate
+cd "$WORK_DIR/repo"
 docker build -t $IMAGE_NAME -f - . <<'DOCKERFILE'
 FROM debian:12
 
