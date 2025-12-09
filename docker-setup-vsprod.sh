@@ -58,6 +58,8 @@ RUN apt-get update && apt-get install -y \
     valgrind \
     inotify-tools \
     bsdmainutils \
+    sudo \
+    tgt \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
@@ -68,7 +70,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -m -s /bin/bash claude
+RUN useradd -m -s /bin/bash claude && \
+    echo 'claude ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
 # Install Rust as claude user
 USER claude
