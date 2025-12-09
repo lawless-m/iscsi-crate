@@ -218,12 +218,15 @@ else
             if [ $TGTD_EXIT_CODE -eq 0 ]; then
                 TGTD_STATUS="✅ PASSED"
                 TGTD_INTERPRETATION="**This is a TARGET BUG** - The test passes against TGTD (reference implementation), so the Rust target implementation is incorrect."
+                ISSUE_LABEL="target-bug"
             elif [ $TGTD_EXIT_CODE -eq 124 ]; then
                 TGTD_STATUS="⏱️ TIMEOUT"
                 TGTD_INTERPRETATION="**This is likely a TEST BUG** - The test timed out against TGTD, indicating the test implementation has issues."
+                ISSUE_LABEL="test-bug"
             else
                 TGTD_STATUS="❌ FAILED"
                 TGTD_INTERPRETATION="**This is a TEST BUG** - The test also fails against TGTD (reference implementation), so the test itself is incorrect, not the Rust target."
+                ISSUE_LABEL="test-bug"
             fi
 
             TGTD_RESULT=$(cat <<EOF
@@ -364,6 +367,7 @@ EOF
             --repo lawless-m/iscsi-crate \
             --title "$ISSUE_TITLE" \
             --body "$ISSUE_BODY" \
+            --label "$ISSUE_LABEL" \
             2>&1)
     fi
 

@@ -74,6 +74,18 @@ fi
 ISSUE_BODY=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json body --jq '.body')
 ISSUE_URL=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json url --jq '.url')
 
+# Fetch issue labels to determine what type of fix is needed
+ISSUE_LABELS=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json labels --jq '.labels[].name' | tr '\n' ',' || echo "")
+
+# Determine issue type from labels
+IS_TEST_BUG=false
+IS_TARGET_BUG=false
+if echo "$ISSUE_LABELS" | grep -q "test-bug"; then
+    IS_TEST_BUG=true
+elif echo "$ISSUE_LABELS" | grep -q "target-bug"; then
+    IS_TARGET_BUG=true
+fi
+
 # Fetch issue comments for additional context
 ISSUE_COMMENTS=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json comments --jq '.comments[] | "## Comment by @\(.author.login) (\(.createdAt))\n\n\(.body)\n"' || echo "")
 if [ -n "$ISSUE_COMMENTS" ]; then
@@ -140,6 +152,58 @@ ATTEMPTS
     fi
 fi
 
+# Customize prompt based on issue type (from labels)
+if [ "$IS_TEST_BUG" = true ]; then
+    ISSUE_TYPE_GUIDANCE=$(cat <<GUIDANCE
+CRITICAL - ISSUE TYPE: TEST BUG (based on label: test-bug)
+
+This issue is labeled as "test-bug", which means TGTD validation showed the test itself is incorrect.
+
+WHAT TO FIX:
+- Fix the TEST CODE in iscsi-test-suite/ directory
+- DO NOT modify the Rust target code in src/ or examples/
+- The Rust target is likely correct; the test has wrong expectations or incorrect implementation
+
+WHY:
+- The test also fails against TGTD (reference iSCSI implementation)
+- This proves the test logic is flawed, not the Rust target
+
+WHERE TO LOOK:
+- Test implementation in iscsi-test-suite/src/
+- Test expectations and assertions
+- Compare against iSCSI RFC 3720 specification
+GUIDANCE
+)
+elif [ "$IS_TARGET_BUG" = true ]; then
+    ISSUE_TYPE_GUIDANCE=$(cat <<GUIDANCE
+CRITICAL - ISSUE TYPE: TARGET BUG (based on label: target-bug)
+
+This issue is labeled as "target-bug", which means TGTD validation showed the test is correct.
+
+WHAT TO FIX:
+- Fix the RUST TARGET CODE in src/ or examples/ directories
+- DO NOT modify the test code in iscsi-test-suite/
+- The tests are correct and validating proper iSCSI RFC compliance
+
+WHY:
+- The same test PASSES against TGTD (reference iSCSI implementation)
+- This proves the Rust target implementation is incorrect
+
+WHERE TO LOOK:
+- Rust target implementation in examples/simple_target.rs
+- Core protocol logic in src/target.rs, src/pdu.rs, src/scsi.rs
+- Compare against iSCSI RFC 3720 specification
+GUIDANCE
+)
+else
+    ISSUE_TYPE_GUIDANCE=$(cat <<GUIDANCE
+NOTE: Issue type not specified via labels. Investigate to determine if this is a test bug or target bug.
+- Check if TGTD validation results are included in the issue description
+- If unclear, you may need to run TGTD validation yourself
+GUIDANCE
+)
+fi
+
 # Create a formatted prompt for Claude Code
 PROMPT=$(cat <<EOF
 GitHub Issue #$ISSUE_NUM: $ISSUE_TITLE
@@ -153,10 +217,7 @@ $PREVIOUS_ATTEMPTS
 
 Please investigate and fix the issue described above.
 
-IMPORTANT: This is a Rust iSCSI target implementation being tested by C test programs.
-- The tests (simple_test.c, iscsi-test-suite/) are CORRECT and should NOT be modified
-- Fix the RUST TARGET CODE in examples/ or src/ directories
-- The tests are validating that the Rust implementation follows the iSCSI RFC correctly
+$ISSUE_TYPE_GUIDANCE
 
 TOOLS AND ENVIRONMENT:
 - Install debugging tools if needed: ./install-debug-tools.sh (handles permissions gracefully)
@@ -167,12 +228,11 @@ TOOLS AND ENVIRONMENT:
 
 Steps:
 1. Read the test output and diagnostic information
-2. Examine the Rust target implementation (examples/simple_target.rs, src/)
-3. Identify why the Rust target is failing the test
-4. Fix the RUST CODE (not the test code)
-5. Test the fix by running: ./run-tests.sh
+2. Identify what needs to be fixed based on the issue label and TGTD validation
+3. Fix the appropriate code (test code for test-bug, Rust target for target-bug)
+4. Test the fix by running: ./run-tests.sh
 
-6. Based on test results:
+5. Based on test results:
 
    **If ALL tests pass:**
    a. Commit your changes with a descriptive commit message
