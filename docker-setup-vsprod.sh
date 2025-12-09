@@ -17,18 +17,23 @@ echo "========================================="
 echo "Cleaning up existing containers..."
 docker rm -f $CONTAINER_NAME 2>/dev/null || true
 
-echo "Removing old work directory..."
-rm -rf "$WORK_DIR"
-
-# 2. Create fresh work directory
-echo "Creating work directory: $WORK_DIR"
+# 2. Ensure work directory exists
+echo "Setting up work directory: $WORK_DIR"
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# 3. Clone the repository (fresh, with full git history)
-echo "Cloning repository..."
-git clone "$REPO_URL" repo
-cd repo
+# 3. Setup repository (update if exists, clone if not)
+if [ -d "repo/.git" ]; then
+    echo "Repository exists, updating..."
+    cd repo
+    git fetch origin
+    git reset --hard origin/master
+else
+    echo "Cloning repository..."
+    rm -rf repo
+    git clone "$REPO_URL" repo
+    cd repo
+fi
 
 # 4. Configure git for commits
 echo "Configuring git..."
