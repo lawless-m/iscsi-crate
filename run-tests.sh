@@ -148,11 +148,23 @@ else
         exit $EXIT_CODE
     fi
 
+    # Parse failed test names from output
+    # Look for lines like "  TI-007: Large Transfer Read [FAIL]"
+    FAILED_TESTS=$(grep -E '\[.*FAIL.*\]' "$OUTPUT_FILE" | sed 's/\x1b\[[0-9;]*m//g' | sed -E 's/^[[:space:]]+([A-Z]+-[0-9]+):.*$/\1/' | tr '\n' ', ' | sed 's/,$//' || echo "")
+
     # Create issue title
     if [ $EXIT_CODE -eq 124 ]; then
-        ISSUE_TITLE="Test Failure: $TEST_NAME - TIMEOUT (${TIMEOUT_SECONDS}s)"
+        if [ -n "$FAILED_TESTS" ]; then
+            ISSUE_TITLE="Test Failure: $FAILED_TESTS - TIMEOUT (${TIMEOUT_SECONDS}s)"
+        else
+            ISSUE_TITLE="Test Failure: $TEST_NAME - TIMEOUT (${TIMEOUT_SECONDS}s)"
+        fi
     else
-        ISSUE_TITLE="Test Failure: $TEST_NAME - Exit Code $EXIT_CODE"
+        if [ -n "$FAILED_TESTS" ]; then
+            ISSUE_TITLE="Test Failure: $FAILED_TESTS"
+        else
+            ISSUE_TITLE="Test Failure: $TEST_NAME - Exit Code $EXIT_CODE"
+        fi
     fi
 
     # Strip ANSI color codes from output for GitHub
