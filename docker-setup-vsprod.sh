@@ -30,10 +30,11 @@ echo "Cloning repository..."
 git clone "$REPO_URL" repo
 cd repo
 
-# 4. Configure git for commits
+# 4. Configure git for commits and authentication
 echo "Configuring git..."
 git config user.name "Claude Code Auto-Fixer"
 git config user.email "noreply@anthropic.com"
+git config credential.helper '!gh auth git-credential'
 
 # 5. Build the Docker image
 echo "Building Docker image..."
