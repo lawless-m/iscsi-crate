@@ -587,8 +587,9 @@ fn handle_text_request(
     let is_send_targets = text_req.parameters.iter()
         .any(|(k, v)| k == "SendTargets" && (v == "All" || v.is_empty()));
 
-    let response_params = if is_send_targets && session.session_type == SessionType::Discovery {
-        // Return target list
+    let response_params = if is_send_targets {
+        // Return target list for any SendTargets request
+        // (RFC 3720: Discovery works even if SessionType isn't explicitly set)
         session.handle_send_targets(target_name, target_address)
     } else {
         // Echo back or handle other text parameters
