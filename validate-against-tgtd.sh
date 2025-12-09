@@ -30,13 +30,14 @@ fi
 
 # Create TGTD config
 TGTD_CONFIG="/tmp/tgtd-$$.conf"
-cat > "$TGTD_CONFIG" <<'EOF'
+cat <<'EOF' | sudo tee "$TGTD_CONFIG" > /dev/null
 <target iqn.2025-12.local:storage.tgtd-validation>
     backing-store /tmp/tgtd-disk.img
     # Allow connections from localhost
     initiator-address 127.0.0.1
 </target>
 EOF
+sudo chmod 644 "$TGTD_CONFIG"
 
 # Create backing store (256MB)
 if [ ! -f /tmp/tgtd-disk.img ]; then
@@ -81,7 +82,7 @@ echo
 
 # Create test config for TGTD
 TGTD_TEST_CONFIG="/tmp/tgtd-test-config.toml"
-cat > "$TGTD_TEST_CONFIG" <<'EOF'
+cat <<'EOF' | sudo tee "$TGTD_TEST_CONFIG" > /dev/null
 [target]
 portal = 127.0.0.1:3260
 iqn = iqn.2025-12.local:storage.tgtd-validation
@@ -92,6 +93,7 @@ timeout = 30
 verbosity = 1
 stop_on_fail = false
 EOF
+sudo chmod 644 "$TGTD_TEST_CONFIG"
 
 # Build test suite if needed
 if [ ! -f ./iscsi-test-suite/iscsi-test-suite ]; then
