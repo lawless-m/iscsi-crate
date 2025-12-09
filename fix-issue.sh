@@ -12,6 +12,7 @@ set -euo pipefail
 # Parse options
 MODEL="haiku"
 PERMISSION_MODE=""
+ITERATION=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
             PERMISSION_MODE="dangerouslySkip"
             shift
             ;;
+        --iteration)
+            ITERATION="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: $0 [options] <issue-number>"
             echo
@@ -34,6 +39,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --model <model>      Model to use (haiku, sonnet, opus) - default: haiku"
             echo "  --auto-edit          Auto-accept file edits (still prompts for bash)"
             echo "  --no-prompts         Bypass all permissions (sandboxed environments only)"
+            echo "  --iteration <num>    Iteration number (for tracking repeated attempts)"
             echo
             echo "Available open issues:"
             gh issue list --repo lawless-m/iscsi-crate --state open --json number,title --jq '.[] | "  #\(.number): \(.title)"'
@@ -68,12 +74,49 @@ fi
 ISSUE_BODY=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json body --jq '.body')
 ISSUE_URL=$(gh issue view --repo lawless-m/iscsi-crate "$ISSUE_NUM" --json url --jq '.url')
 
+# Gather context about previous attempts if this is not the first iteration
+PREVIOUS_ATTEMPTS=""
+if [ -n "$ITERATION" ] && [ "$ITERATION" -gt 1 ]; then
+    echo "Gathering context from previous attempts..."
+
+    # Look for WIP commits from previous iterations
+    WIP_COMMITS=$(git log --oneline --grep="WIP: Attempted fix iteration" -5 2>/dev/null || echo "")
+
+    if [ -n "$WIP_COMMITS" ]; then
+        PREVIOUS_ATTEMPTS=$(cat <<ATTEMPTS
+
+================================================================================
+PREVIOUS ATTEMPTS (You have tried fixing this before):
+================================================================================
+
+This is attempt #$ITERATION to fix this issue. Previous attempts have failed.
+
+Recent failed attempts:
+$WIP_COMMITS
+
+IMPORTANT: Review what was tried before by examining these commits:
+  git show <commit-hash>
+  git diff <commit-hash>~1..<commit-hash>
+
+DO NOT repeat the same approach. Try a different strategy:
+- If previous attempts modified PDU encoding, consider the PDU decoding side
+- If previous attempts changed data assembly, consider buffer management
+- If previous attempts adjusted sequence numbers, consider the protocol state machine
+- Look for edge cases that weren't considered in previous attempts
+- Consider adding more detailed logging to understand what's actually happening
+
+ATTEMPTS
+)
+    fi
+fi
+
 # Create a formatted prompt for Claude Code
 PROMPT=$(cat <<EOF
 GitHub Issue #$ISSUE_NUM: $ISSUE_TITLE
 URL: $ISSUE_URL
 
 $ISSUE_BODY
+$PREVIOUS_ATTEMPTS
 
 ================================================================================
 

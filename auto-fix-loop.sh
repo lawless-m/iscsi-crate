@@ -66,10 +66,27 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     ISSUE_NUM=$(echo "$OPEN_ISSUES" | head -1)
     echo "Found open issue: #$ISSUE_NUM"
     echo
-    echo "Attempting automated fix..."
 
-    # Run fix with no prompts for full automation
-    if ./fix-issue.sh --model "$MODEL" --no-prompts "$ISSUE_NUM"; then
+    # Before attempting fix, check if there are uncommitted changes from previous attempt
+    if [ $iteration -gt 1 ]; then
+        if [ -n "$(git status --short | grep -v '^??')" ]; then
+            echo "Committing previous failed attempt #$((iteration - 1))..."
+            git add -A
+            git commit -m "WIP: Attempted fix iteration $((iteration - 1)) - tests still failing
+
+Previous attempt did not resolve the issue. Tests still show:
+- TI-007: Large Transfer Read - data mismatch
+- TI-008: Large Transfer Write - data mismatch
+
+This commit preserves the attempted changes for context." || true
+            git push origin master || true
+        fi
+    fi
+
+    echo "Attempting automated fix (iteration $iteration)..."
+
+    # Run fix with iteration context for full automation
+    if ./fix-issue.sh --model "$MODEL" --no-prompts --iteration "$iteration" "$ISSUE_NUM"; then
         echo "Fix attempt completed"
     else
         echo "Fix attempt failed - will retry on next iteration"
