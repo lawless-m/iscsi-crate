@@ -20,7 +20,7 @@ echo
 
 # Pull latest changes from GitHub
 echo "Pulling latest changes from GitHub..."
-git pull origin master || {
+git pull origin master 2>&1 | grep -v 'credential-!' || {
     echo "Warning: Failed to pull latest changes, continuing with local version"
 }
 echo
