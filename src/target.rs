@@ -611,13 +611,13 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
         if response.status == pdu::scsi_status::CHECK_CONDITION {
             if let Some(ref sd) = response.sense {
-                let sense_bytes = sd.to_bytes();
+                let mut sense_bytes = sd.to_bytes();
                 log::debug!(
                     "Sending CHECK CONDITION with sense data: sense_key=0x{:02x}, asc=0x{:02x}, ascq=0x{:02x}",
                     sd.sense_key, sd.asc, sd.ascq
                 );
-                // Store sense data for REQUEST SENSE retrieval
-                session.last_sense_data = Some(sense_bytes);
+                // Store the FULL sense data (including response code) for REQUEST SENSE
+                session.last_sense_data = Some(sense_bytes.clone());
             } else {
                 log::warn!("CHECK CONDITION status but no sense data available!");
             }
