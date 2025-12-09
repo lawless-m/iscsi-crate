@@ -507,7 +507,36 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
     }
 
     // Handle non-write commands (reads, inquiries, etc.)
-    let response = if is_sync_cache {
+    let response = if opcode == 0x03 {
+        // REQUEST SENSE (0x03) - return stored sense data instead of calling handler
+        log::info!("REQUEST SENSE called - returning stored sense data");
+        if cmd.cdb.len() < 6 {
+            ScsiResponse::check_condition(crate::scsi::SenseData::invalid_command())
+        } else {
+            let alloc_len = cmd.cdb[4] as usize;
+
+            // Return the stored sense data, or NO_SENSE if none is stored
+            let mut data = match &session.last_sense_data {
+                Some(sense_bytes) => {
+                    log::info!("Returning stored sense data: {:02x?}", sense_bytes);
+                    sense_bytes.clone()
+                }
+                None => {
+                    log::warn!("No stored sense data - returning NO_SENSE");
+                    // No stored sense data - return NO_SENSE
+                    let sense = crate::scsi::SenseData::new(
+                        crate::scsi::sense_key::NO_SENSE,
+                        crate::scsi::asc::NO_ADDITIONAL_SENSE,
+                        0,
+                    );
+                    sense.to_bytes()
+                }
+            };
+
+            data.truncate(alloc_len.min(data.len()));
+            ScsiResponse::good(data)
+        }
+    } else if is_sync_cache {
         // SYNCHRONIZE CACHE needs mutable access to call flush()
         let mut device_guard = device.lock().map_err(|_| {
             IscsiError::Scsi("Device lock poisoned".to_string())
@@ -579,15 +608,44 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
     } else {
         // No data or write command - send SCSI Response
         let sense_data = response.sense.as_ref().map(|s| s.to_bytes());
+
+        if response.status == pdu::scsi_status::CHECK_CONDITION {
+            if let Some(ref sd) = response.sense {
+                let sense_bytes = sd.to_bytes();
+                log::debug!(
+                    "Sending CHECK CONDITION with sense data: sense_key=0x{:02x}, asc=0x{:02x}, ascq=0x{:02x}",
+                    sd.sense_key, sd.asc, sd.ascq
+                );
+                // Store sense data for REQUEST SENSE retrieval
+                session.last_sense_data = Some(sense_bytes);
+            } else {
+                log::warn!("CHECK CONDITION status but no sense data available!");
+            }
+        } else {
+            // Clear sense data when status is GOOD
+            session.last_sense_data = None;
+        }
+
+        let response_code = if response.status != pdu::scsi_status::GOOD {
+            1 // Target Failure when status is not GOOD
+        } else {
+            0 // Command Completed at Target
+        };
+
+        // Include sense data in the response PDU per RFC 3720 Section 10.4.7.
+        // We also store it for REQUEST SENSE retrieval, as libiscsi will call REQUEST SENSE
+        // to retrieve the actual sense data from the task structure.
+        let pdu_sense_data = sense_data.as_deref();
+
         let scsi_resp = IscsiPdu::scsi_response(
             cmd.itt,
             session.next_stat_sn(),
             session.exp_cmd_sn,
             session.max_cmd_sn,
             response.status,
-            0, // iSCSI response code: completed
+            response_code,
             0, // residual count
-            sense_data.as_deref(),
+            pdu_sense_data,
         );
         responses.push(scsi_resp);
     }

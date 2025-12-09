@@ -179,6 +179,8 @@ pub struct IscsiSession {
     pub pending_writes: HashMap<u32, PendingWrite>,
     /// Next Target Transfer Tag (incremented for each new R2T sequence)
     pub next_ttt: u32,
+    /// Latest sense data to be returned by REQUEST SENSE
+    pub last_sense_data: Option<Vec<u8>>,
 
     // Authentication
     /// Authentication configuration for this session
@@ -214,6 +216,7 @@ impl IscsiSession {
             next_stage: 0,
             pending_writes: HashMap::new(),
             next_ttt: 1, // TTT 0 is reserved for unsolicited data
+            last_sense_data: None,
             auth_config: AuthConfig::None,
             chap_state: None,
             target_chap_state: None,
