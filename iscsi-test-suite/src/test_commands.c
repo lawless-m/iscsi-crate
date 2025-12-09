@@ -256,12 +256,72 @@ static test_result_t test_report_luns(struct iscsi_context *unused_iscsi,
 static test_result_t test_invalid_command(struct iscsi_context *unused_iscsi,
                                            test_config_t *config,
                                            test_report_t *report) {
-    /* Sending arbitrary SCSI commands requires low-level task construction */
-    /* This would need scsi_cdb_* functions which are more complex */
+    struct iscsi_context *iscsi;
+    struct scsi_task *task;
+    unsigned char cdb[6];
+
     (void)unused_iscsi;
-    (void)config;
-    report_set_result(report, TEST_SKIP, "Invalid command test requires low-level task construction");
-    return TEST_SKIP;
+
+    if (!config->iqn || strlen(config->iqn) == 0) {
+        report_set_result(report, TEST_SKIP, "No IQN specified");
+        return TEST_SKIP;
+    }
+
+    iscsi = create_iscsi_context_for_test(config);
+    if (!iscsi || iscsi_connect_target(iscsi, config) != 0) {
+        report_set_result(report, TEST_ERROR, "Failed to connect");
+        if (iscsi) iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* Create a CDB with an invalid/unsupported opcode (0xFF) */
+    memset(cdb, 0, sizeof(cdb));
+    cdb[0] = 0xFF;  /* Invalid opcode */
+
+    /* Create task with the invalid CDB */
+    task = scsi_create_task(6, cdb, SCSI_XFER_NONE, 0);
+    if (!task) {
+        report_set_result(report, TEST_ERROR, "Failed to create task");
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* Execute the command */
+    task = iscsi_scsi_command_sync(iscsi, config->lun, task, NULL);
+    if (!task) {
+        report_set_result(report, TEST_ERROR, "Failed to execute command");
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* Verify target responds with CHECK CONDITION status */
+    if (task->status != SCSI_STATUS_CHECK_CONDITION) {
+        report_set_result(report, TEST_FAIL,
+                         "Expected CHECK CONDITION status, got status code");
+        scsi_free_scsi_task(task);
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_FAIL;
+    }
+
+    /* Verify sense data indicates ILLEGAL REQUEST (invalid command) */
+    if (task->sense.key != SCSI_SENSE_ILLEGAL_REQUEST) {
+        report_set_result(report, TEST_FAIL,
+                         "Expected ILLEGAL REQUEST sense key for invalid command");
+        scsi_free_scsi_task(task);
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_FAIL;
+    }
+
+    scsi_free_scsi_task(task);
+    iscsi_disconnect_target(iscsi);
+    iscsi_destroy_context(iscsi);
+
+    report_set_result(report, TEST_PASS, NULL);
+    return TEST_PASS;
 }
 
 /* TC-009: Command to Invalid LUN */
