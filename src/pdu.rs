@@ -674,6 +674,53 @@ pub struct ScsiDataOutPdu {
 }
 
 // ============================================================================
+// R2T (Ready To Transfer) PDU helpers
+// ============================================================================
+
+impl IscsiPdu {
+    /// Create an R2T (Ready To Transfer) PDU
+    ///
+    /// R2T is sent by the target to request data from the initiator for a write command
+    /// when the initiator has more data to send beyond the FirstBurstLength.
+    ///
+    /// RFC 3720 Section 10.8
+    pub fn r2t(
+        lun: u64,
+        itt: u32,
+        ttt: u32,
+        stat_sn: u32,
+        exp_cmd_sn: u32,
+        max_cmd_sn: u32,
+        r2t_sn: u32,
+        buffer_offset: u32,
+        desired_data_transfer_length: u32,
+    ) -> Self {
+        let mut pdu = IscsiPdu::new();
+        pdu.opcode = opcode::R2T;
+        pdu.flags = flags::FINAL; // R2T always has F bit set
+        pdu.lun = lun;
+        pdu.itt = itt;
+
+        // Target Transfer Tag (bytes 20-23)
+        pdu.specific[0..4].copy_from_slice(&ttt.to_be_bytes());
+        // StatSN (bytes 24-27)
+        pdu.specific[4..8].copy_from_slice(&stat_sn.to_be_bytes());
+        // ExpCmdSN (bytes 28-31)
+        pdu.specific[8..12].copy_from_slice(&exp_cmd_sn.to_be_bytes());
+        // MaxCmdSN (bytes 32-35)
+        pdu.specific[12..16].copy_from_slice(&max_cmd_sn.to_be_bytes());
+        // R2TSN (bytes 36-39)
+        pdu.specific[16..20].copy_from_slice(&r2t_sn.to_be_bytes());
+        // Buffer Offset (bytes 40-43)
+        pdu.specific[20..24].copy_from_slice(&buffer_offset.to_be_bytes());
+        // Desired Data Transfer Length (bytes 44-47)
+        pdu.specific[24..28].copy_from_slice(&desired_data_transfer_length.to_be_bytes());
+
+        pdu
+    }
+}
+
+// ============================================================================
 // NOP-Out/NOP-In PDU helpers
 // ============================================================================
 

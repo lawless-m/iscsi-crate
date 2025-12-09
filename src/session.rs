@@ -134,6 +134,12 @@ pub struct PendingWrite {
     pub block_size: u32,
     /// Total bytes received so far
     pub bytes_received: u32,
+    /// Target Transfer Tag (used for R2T correlation)
+    pub ttt: u32,
+    /// R2T sequence number (incremented for each R2T sent)
+    pub r2t_sn: u32,
+    /// LUN for this command
+    pub lun: u64,
 }
 
 /// iSCSI Session
@@ -171,6 +177,8 @@ pub struct IscsiSession {
     // Command tracking
     /// Pending write commands indexed by ITT (Initiator Task Tag)
     pub pending_writes: HashMap<u32, PendingWrite>,
+    /// Next Target Transfer Tag (incremented for each new R2T sequence)
+    pub next_ttt: u32,
 
     // Authentication
     /// Authentication configuration for this session
@@ -205,11 +213,23 @@ impl IscsiSession {
             current_stage: 0,
             next_stage: 0,
             pending_writes: HashMap::new(),
+            next_ttt: 1, // TTT 0 is reserved for unsolicited data
             auth_config: AuthConfig::None,
             chap_state: None,
             target_chap_state: None,
             chap_completed: false,
         }
+    }
+
+    /// Generate the next Target Transfer Tag
+    pub fn next_target_transfer_tag(&mut self) -> u32 {
+        let ttt = self.next_ttt;
+        self.next_ttt = self.next_ttt.wrapping_add(1);
+        // TTT 0xFFFFFFFF is reserved (means no TTT), so skip it
+        if self.next_ttt == 0xFFFF_FFFF {
+            self.next_ttt = 1;
+        }
+        ttt
     }
 
     /// Create session from login request
@@ -1058,10 +1078,11 @@ mod tests {
 
         let params = session.generate_response_params();
 
-        // Check that required params are present
-        assert!(params.iter().any(|(k, v)| k == "SessionType" && v == "Normal"));
+        // Check that required negotiated params are present
+        // Note: SessionType is declarative and should NOT be echoed back per RFC 3720
         assert!(params.iter().any(|(k, _)| k == "MaxRecvDataSegmentLength"));
         assert!(params.iter().any(|(k, _)| k == "MaxBurstLength"));
+        assert!(params.iter().any(|(k, _)| k == "FirstBurstLength"));
     }
 
     #[test]
