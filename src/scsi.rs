@@ -274,6 +274,9 @@ impl ScsiHandler {
 
         let opcode = cdb[0];
 
+        // Note: LUN validation is done at the target level since the LUN is in the PDU header,
+        // not in the CDB. The handler receives already-validated LUN.
+
         match ScsiOpcode::from_u8(opcode) {
             Some(ScsiOpcode::TestUnitReady) => Self::handle_test_unit_ready(),
             Some(ScsiOpcode::Inquiry) => Self::handle_inquiry(cdb, device),
