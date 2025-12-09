@@ -51,6 +51,13 @@ RUN apt-get update && apt-get install -y \
     nodejs \
     npm \
     procps \
+    tcpdump \
+    tshark \
+    strace \
+    gdb \
+    valgrind \
+    inotify-tools \
+    bsdmainutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
