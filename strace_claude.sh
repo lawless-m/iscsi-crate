@@ -29,14 +29,36 @@ if ! docker exec "$CONTAINER_NAME" which strace >/dev/null 2>&1; then
     echo
 fi
 
-# Find Claude process PID
-CLAUDE_PID=$(docker exec "$CONTAINER_NAME" sh -c "pgrep -f '^claude' | head -1" || true)
+# Find Claude process PID using /proc (works in minimal containers)
+echo "Searching for Claude Code process..."
+CLAUDE_PID=$(docker exec "$CONTAINER_NAME" sh -c '
+    for pid in /proc/[0-9]*; do
+        pid_num=$(basename "$pid")
+        if [ -f "$pid/cmdline" ]; then
+            cmdline=$(cat "$pid/cmdline" 2>/dev/null | tr "\0" " ")
+            if echo "$cmdline" | grep -q "claude"; then
+                echo "$pid_num"
+                break
+            fi
+        fi
+    done
+' || true)
 
 if [ -z "$CLAUDE_PID" ]; then
     echo "Error: Claude Code process not found in container"
     echo
-    echo "Running processes:"
-    docker exec "$CONTAINER_NAME" sh -c "ps aux | grep -E '(claude|node)' | grep -v grep"
+    echo "Checking /proc for active processes..."
+    docker exec "$CONTAINER_NAME" sh -c '
+        echo "Active processes:"
+        for pid in /proc/[0-9]*; do
+            if [ -f "$pid/cmdline" ]; then
+                cmdline=$(cat "$pid/cmdline" 2>/dev/null | tr "\0" " ")
+                [ -n "$cmdline" ] && echo "  PID $(basename $pid): $cmdline"
+            fi
+        done | head -10
+    '
+    echo
+    echo "Tip: Claude might not be running yet, or has already finished."
     exit 1
 fi
 
