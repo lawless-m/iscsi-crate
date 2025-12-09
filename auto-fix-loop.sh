@@ -18,6 +18,13 @@ echo "Test mode: $TEST_MODE"
 echo "========================================="
 echo
 
+# Pull latest changes from GitHub
+echo "Pulling latest changes from GitHub..."
+git pull origin master || {
+    echo "Warning: Failed to pull latest changes, continuing with local version"
+}
+echo
+
 iteration=0
 while [ $iteration -lt $MAX_ITERATIONS ]; do
     iteration=$((iteration + 1))
