@@ -196,8 +196,7 @@ fi)
 - Configuration: Target at 127.0.0.1:3261
 
 ### Diagnostic Information
-- **Target Status:** $(ss -tlnp 2>/dev/null | grep :3261 > /dev/null && echo "Listening on port 3261" || echo "NOT listening on port 3261")
-- **Network Test:** $(timeout 2 bash -c 'echo "" | nc -v 127.0.0.1 3261' 2>&1 | head -1 || echo "Cannot connect")
+- **Target Connectivity:** $(timeout 2 bash -c 'echo "" | nc -v 127.0.0.1 3261' 2>&1 | head -1 || echo "Cannot connect to 127.0.0.1:3261")
 
 ### Expected Behavior
 $(if [ "$TEST_MODE" = "full" ]; then
