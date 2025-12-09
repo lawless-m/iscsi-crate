@@ -111,11 +111,13 @@ IMPORTANT: Review what was tried before by examining these commits from the WIP 
   git log -p origin/$WIP_BRANCH
 
 DO NOT repeat the same approach. Try a different strategy:
-- If previous attempts modified PDU encoding, consider the PDU decoding side
-- If previous attempts changed data assembly, consider buffer management
-- If previous attempts adjusted sequence numbers, consider the protocol state machine
-- Look for edge cases that weren't considered in previous attempts
-- Consider adding more detailed logging to understand what's actually happening
+- If previous attempts modified data encoding, try the decoding/parsing side
+- If previous attempts changed algorithms, try different data structures
+- If previous attempts fixed symptoms, look for root causes deeper in the call stack
+- If previous attempts added edge case handling, reconsider the main logic path
+- If previous attempts were complex, try a simpler approach
+- Consider adding detailed logging/tracing to understand actual runtime behavior
+- Review the test failure output carefully for clues previous attempts may have missed
 
 ATTEMPTS
 )
