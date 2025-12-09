@@ -473,12 +473,6 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
 
                 offset += request_len;
                 r2t_sn += 1;
-
-                // Only send up to max_outstanding_r2t R2Ts at a time
-                // For simplicity, we send all at once (most targets allow this)
-                if responses.len() >= session.params.max_outstanding_r2t as usize {
-                    break;
-                }
             }
 
             // Update pending write with next R2T sequence number
