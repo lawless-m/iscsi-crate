@@ -105,6 +105,8 @@ cd "$WORK_DIR"
 ln -sf repo/run-auto-fix-vsprod.sh .
 ln -sf repo/run-implement-vsprod.sh .
 ln -sf repo/docker-setup-vsprod.sh .
+ln -sf repo/test-tgtd.sh .
+ln -sf repo/test-rust.sh .
 
 # 7. Display instructions
 echo ""
