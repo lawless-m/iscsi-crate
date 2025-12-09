@@ -22,11 +22,22 @@ if [ -z "$ISSUE_NUM" ]; then
     exit 1
 fi
 
-# Check if model is actually a number (user might omit model parameter)
+# Check if model is actually a number (user might have swapped parameters)
 if [[ "$MODEL" =~ ^[0-9]+$ ]]; then
-    # User provided only issue number
-    ISSUE_NUM="$MODEL"
-    MODEL="haiku"
+    # First param is a number - either:
+    # 1. User provided only issue number (no second param)
+    # 2. User swapped parameters: issue-number then model
+    if [ -n "$ISSUE_NUM" ] && [[ ! "$ISSUE_NUM" =~ ^[0-9]+$ ]]; then
+        # Second param is not a number, so it's the model
+        # User ran: ./script 5 sonnet (swapped order)
+        TEMP="$MODEL"
+        MODEL="$ISSUE_NUM"
+        ISSUE_NUM="$TEMP"
+    else
+        # User provided only issue number, no model specified
+        ISSUE_NUM="$MODEL"
+        MODEL="haiku"
+    fi
 fi
 
 echo "========================================="
