@@ -184,9 +184,15 @@ $CLEAN_OUTPUT
 \`\`\`
 
 ### Files Involved
-- Test Program: \`simple_test.c\`
-- Test Binary: \`simple_test\`
-- Target Example: \`examples/simple_target.rs\`
+$(if [ "$TEST_MODE" = "full" ]; then
+    echo "- Test Suite: \`iscsi-test-suite/\`"
+    echo "- Config: \`test-config.toml\`"
+    echo "- Target Implementation: \`src/target.rs\`, \`src/pdu.rs\`, \`src/scsi.rs\`"
+else
+    echo "- Test Program: \`simple_test.c\`"
+    echo "- Test Binary: \`simple_test\`"
+    echo "- Target Example: \`examples/simple_target.rs\`"
+fi)
 - Configuration: Target at 127.0.0.1:3261
 
 ### Diagnostic Information
@@ -194,12 +200,17 @@ $CLEAN_OUTPUT
 - **Network Test:** $(timeout 2 bash -c 'echo "" | nc -v 127.0.0.1 3261' 2>&1 | head -1 || echo "Cannot connect")
 
 ### Expected Behavior
-All 5 tests should pass:
-1. Create iSCSI context
-2. Connect to target
-3. INQUIRY command
-4. READ CAPACITY command
-5. READ/WRITE operations with data integrity check
+$(if [ "$TEST_MODE" = "full" ]; then
+    echo "All 33 tests from the comprehensive iSCSI test suite should pass."
+    echo "Current failures indicate protocol-level bugs in the Rust iSCSI target implementation."
+else
+    echo "All 5 basic tests should pass:"
+    echo "1. Create iSCSI context"
+    echo "2. Connect to target"
+    echo "3. INQUIRY command"
+    echo "4. READ CAPACITY command"
+    echo "5. READ/WRITE operations with data integrity check"
+fi)
 
 ### Actual Behavior
 Test failed with exit code $EXIT_CODE. See output above.
