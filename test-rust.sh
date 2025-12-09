@@ -26,7 +26,7 @@ fi
 docker run --rm \
     -v $WORK_DIR/repo:/repo \
     $IMAGE_NAME \
-    /bin/bash -c "source ~/.cargo/env && cd /repo && ./run-tests.sh $MODE"
+    /bin/bash -c "source ~/.cargo/env && cd /repo && sudo ./run-tests.sh $MODE"
 
 EXIT_CODE=$?
 
