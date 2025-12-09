@@ -260,10 +260,15 @@ impl IscsiPdu {
         // Byte 1: Flags
         buf.push(self.flags);
 
-        // Bytes 2-3: Reserved (opcode-specific, stored in specific[0..2] for some PDUs)
-        // For simplicity, use zeros unless overridden
-        buf.push(0);
-        buf.push(0);
+        // Bytes 2-3: Reserved (opcode-specific)
+        // Special case for SCSI Response: bytes 2-3 are Response and Status
+        if self.opcode == opcode::SCSI_RESPONSE {
+            buf.push(self.specific[0]); // Response (byte 2)
+            buf.push(self.specific[1]); // Status (byte 3)
+        } else {
+            buf.push(0);
+            buf.push(0);
+        }
 
         // Byte 4: Total AHS Length
         buf.push(self.ahs_length);
@@ -527,17 +532,24 @@ impl IscsiPdu {
         pdu.flags = flags::FINAL; // Always final for response
         pdu.itt = itt;
 
-        // Opcode-specific fields
-        pdu.specific[0] = response; // iSCSI response code
-        pdu.specific[1] = status;   // SCSI status
+        // NOTE: Response and Status go in BHS bytes 2-3, which are NOT part of the 'specific' array!
+        // The 'specific' array starts at byte 20 of the BHS.
+        // We need to store them in reserved[0] and reserved[1] which we'll handle in to_bytes()
+        // For now, store them in specific for backwards compat with serialization
+        // Actually, we need to refactor to add response/status fields to IscsiPdu
 
-        // StatSN
+        // WORKAROUND: Store response/status in a way that to_bytes() will handle
+        // We'll need to modify the serialization to put these in the right place
+        pdu.specific[0] = response; // Will be moved to BHS byte 2 during serialization
+        pdu.specific[1] = status;   // Will be moved to BHS byte 3 during serialization
+
+        // StatSN at bytes 24-27 (specific[4..8])
         pdu.specific[4..8].copy_from_slice(&stat_sn.to_be_bytes());
-        // ExpCmdSN
+        // ExpCmdSN at bytes 28-31 (specific[8..12])
         pdu.specific[8..12].copy_from_slice(&exp_cmd_sn.to_be_bytes());
-        // MaxCmdSN
+        // MaxCmdSN at bytes 32-35 (specific[12..16])
         pdu.specific[12..16].copy_from_slice(&max_cmd_sn.to_be_bytes());
-        // Residual count
+        // Residual count at bytes 40-43 (specific[20..24])
         pdu.specific[20..24].copy_from_slice(&residual_count.to_be_bytes());
 
         // Add sense data if provided

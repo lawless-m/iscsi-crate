@@ -294,8 +294,11 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
     );
 
     // Validate LUN - only LUN 0 is supported
+    // iSCSI LUNs are encoded per RFC 3720 section 3.4.6.1
+    // For simplicity, we check if the raw LUN value is 0
+    // LUN 0 is always encoded as 0x0000000000000000 regardless of addressing method
     if cmd.lun != 0 {
-        log::warn!("Command to invalid LUN: 0x{:016x}", cmd.lun);
+        log::warn!("Command 0x{:02x} to invalid LUN: 0x{:016x}", cmd.cdb[0], cmd.lun);
         let sense = crate::scsi::SenseData::new(
             crate::scsi::sense_key::ILLEGAL_REQUEST,
             crate::scsi::asc::LOGICAL_UNIT_NOT_SUPPORTED,
@@ -366,14 +369,21 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
             let block_size = device_guard.block_size();
             drop(device_guard);
 
+            let expected_data_len = transfer_length as usize * block_size as usize;
+
             // Check if immediate data is present in this PDU
             if !pdu.data.is_empty() {
                 log::debug!(
-                    "WRITE command with immediate data: ITT=0x{:08x}, LBA={}, {} bytes",
-                    cmd.itt, lba, pdu.data.len()
+                    "WRITE command with immediate data: ITT=0x{:08x}, LBA={}, {} bytes (expected {})",
+                    cmd.itt, lba, pdu.data.len(), expected_data_len
                 );
 
                 // Write the immediate data
+                log::debug!(
+                    "Writing immediate data: LBA={}, {} bytes (blocks {}-{})",
+                    lba, pdu.data.len(), lba, lba + (pdu.data.len() as u64 / block_size as u64) - 1
+                );
+
                 let mut device_guard = device.lock().map_err(|_| {
                     IscsiError::Scsi("Device lock poisoned".to_string())
                 })?;
@@ -397,7 +407,7 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
                 }
 
                 // If this is the final PDU and all data has been received, send success response
-                if cmd.final_flag && pdu.data.len() as u32 >= transfer_length * block_size {
+                if cmd.final_flag && pdu.data.len() == expected_data_len {
                     log::debug!(
                         "Write complete: ITT=0x{:08x}, {} bytes written",
                         cmd.itt, pdu.data.len()
@@ -414,12 +424,18 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
                     )]);
                 } else {
                     // Store pending write for additional Data-Out PDUs
+                    // Start tracking from the end of the immediate data
+                    let bytes_received = pdu.data.len() as u32;
                     session.pending_writes.insert(cmd.itt, PendingWrite {
                         lba,
                         transfer_length,
                         block_size,
-                        bytes_received: pdu.data.len() as u32,
+                        bytes_received,
                     });
+                    log::debug!(
+                        "Stored pending write for continuation: ITT=0x{:08x}, {} of {} bytes received",
+                        cmd.itt, bytes_received, expected_data_len
+                    );
                 }
             } else {
                 // No immediate data, expect Data-Out PDUs
@@ -471,6 +487,9 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
         let mut offset = 0u32;
         let mut data_sn = 0u32;
 
+        // StatSN should only be incremented once for the final PDU
+        let stat_sn = session.next_stat_sn();
+
         while offset < response.data.len() as u32 {
             let remaining = response.data.len() - offset as usize;
             let chunk_size = remaining.min(max_data_seg);
@@ -481,7 +500,7 @@ fn handle_scsi_command<D: ScsiBlockDevice>(
             let data_in = IscsiPdu::scsi_data_in(
                 cmd.itt,
                 0xFFFF_FFFF, // TTT
-                session.next_stat_sn(),
+                stat_sn,
                 session.exp_cmd_sn,
                 session.max_cmd_sn,
                 data_sn,
@@ -537,9 +556,16 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
 
     let pending = pending_write.unwrap();
     let block_size = pending.block_size;
+    let transfer_length = pending.transfer_length;
 
     // Calculate the LBA for this chunk based on buffer_offset
-    let lba = pending.lba + (data_out.buffer_offset / block_size) as u64;
+    // buffer_offset is the offset from the start of the transfer
+    let lba = pending.lba + (data_out.buffer_offset / block_size as u32) as u64;
+
+    log::debug!(
+        "Writing Data-Out: ITT=0x{:08x}, buffer_offset={}, LBA={}, {} bytes",
+        data_out.itt, data_out.buffer_offset, lba, data_out.data.len()
+    );
 
     // Write the data
     let mut device_guard = device.lock().map_err(|_| {
@@ -549,15 +575,16 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
     let write_result = device_guard.write(lba, &data_out.data, block_size);
     drop(device_guard);
 
-    // Update bytes received
-    pending.bytes_received += data_out.data.len() as u32;
+    // Update bytes received - should match buffer_offset + current data length
+    let expected_bytes = data_out.buffer_offset + data_out.data.len() as u32;
+    pending.bytes_received = expected_bytes;
+
+    let total_expected = transfer_length * block_size;
 
     log::debug!(
-        "Wrote {} bytes to LBA {}, total received: {}/{}",
-        data_out.data.len(),
-        lba,
+        "Updated bytes received: {}/{} bytes",
         pending.bytes_received,
-        pending.transfer_length * block_size
+        total_expected
     );
 
     let (status, sense) = match write_result {
@@ -571,6 +598,14 @@ fn handle_scsi_data_out<D: ScsiBlockDevice>(
 
     // If this is the final data PDU, send a response and clean up
     if data_out.final_flag {
+        // Verify all data was received
+        if pending.bytes_received != total_expected {
+            log::warn!(
+                "Incomplete write: received {} bytes, expected {}",
+                pending.bytes_received, total_expected
+            );
+        }
+
         // Remove the pending write
         session.pending_writes.remove(&data_out.itt);
 
