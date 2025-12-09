@@ -55,7 +55,7 @@ if [ "$TEST_MODE" = "full" ]; then
         echo -e "${RED}ERROR: iscsi-test-suite directory not found${NC}"
         exit 2
     fi
-    (cd iscsi-test-suite && make clean && make) || {
+    (cd iscsi-test-suite && chmod -R u+w obj 2>/dev/null || true && make clean && make) || {
         echo -e "${RED}ERROR: Failed to build iscsi-test-suite${NC}"
         exit 2
     }
