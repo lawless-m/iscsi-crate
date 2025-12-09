@@ -163,14 +163,154 @@ static test_result_t test_read_capacity16(struct iscsi_context *unused_iscsi,
     return TEST_PASS;
 }
 
-/* Remaining command tests implemented as SKIPs for now */
-static test_result_t test_skip_placeholder(struct iscsi_context *unused_iscsi,
-                                            test_config_t *config,
-                                            test_report_t *report) {
+/* TC-005: MODE SENSE */
+static test_result_t test_mode_sense(struct iscsi_context *unused_iscsi,
+                                      test_config_t *config,
+                                      test_report_t *report) {
+    struct iscsi_context *iscsi;
+    struct scsi_task *task;
+
+    (void)unused_iscsi;
+
+    if (!config->iqn || strlen(config->iqn) == 0) {
+        report_set_result(report, TEST_SKIP, "No IQN specified");
+        return TEST_SKIP;
+    }
+
+    iscsi = create_iscsi_context_for_test(config);
+    if (!iscsi || iscsi_connect_target(iscsi, config) != 0) {
+        report_set_result(report, TEST_ERROR, "Failed to connect");
+        if (iscsi) iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* MODE SENSE(6) - Page 0x3F (all pages), current values */
+    task = iscsi_modesense6_sync(iscsi, config->lun, 0, SCSI_MODESENSE_PC_CURRENT, 0x3F, 0, 255);
+    if (!task || task->status != SCSI_STATUS_GOOD) {
+        report_set_result(report, TEST_FAIL, "MODE SENSE(6) command failed");
+        if (task) scsi_free_scsi_task(task);
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_FAIL;
+    }
+
+    scsi_free_scsi_task(task);
+    iscsi_disconnect_target(iscsi);
+    iscsi_destroy_context(iscsi);
+
+    report_set_result(report, TEST_PASS, NULL);
+    return TEST_PASS;
+}
+
+/* TC-006: REQUEST SENSE */
+static test_result_t test_request_sense(struct iscsi_context *unused_iscsi,
+                                         test_config_t *config,
+                                         test_report_t *report) {
+    /* REQUEST SENSE doesn't have a dedicated sync function in libiscsi */
+    /* The sense data is automatically retrieved on errors */
     (void)unused_iscsi;
     (void)config;
-    report_set_result(report, TEST_SKIP, "Test not yet implemented");
+    report_set_result(report, TEST_SKIP, "REQUEST SENSE handled automatically by libiscsi");
     return TEST_SKIP;
+}
+
+/* TC-007: REPORT LUNS */
+static test_result_t test_report_luns(struct iscsi_context *unused_iscsi,
+                                       test_config_t *config,
+                                       test_report_t *report) {
+    struct iscsi_context *iscsi;
+    struct scsi_task *task;
+
+    (void)unused_iscsi;
+
+    if (!config->iqn || strlen(config->iqn) == 0) {
+        report_set_result(report, TEST_SKIP, "No IQN specified");
+        return TEST_SKIP;
+    }
+
+    iscsi = create_iscsi_context_for_test(config);
+    if (!iscsi || iscsi_connect_target(iscsi, config) != 0) {
+        report_set_result(report, TEST_ERROR, "Failed to connect");
+        if (iscsi) iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    task = iscsi_reportluns_sync(iscsi, 0, 16384);
+    if (!task || task->status != SCSI_STATUS_GOOD) {
+        report_set_result(report, TEST_FAIL, "REPORT LUNS command failed");
+        if (task) scsi_free_scsi_task(task);
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_FAIL;
+    }
+
+    scsi_free_scsi_task(task);
+    iscsi_disconnect_target(iscsi);
+    iscsi_destroy_context(iscsi);
+
+    report_set_result(report, TEST_PASS, NULL);
+    return TEST_PASS;
+}
+
+/* TC-008: Invalid Command */
+static test_result_t test_invalid_command(struct iscsi_context *unused_iscsi,
+                                           test_config_t *config,
+                                           test_report_t *report) {
+    /* Sending arbitrary SCSI commands requires low-level task construction */
+    /* This would need scsi_cdb_* functions which are more complex */
+    (void)unused_iscsi;
+    (void)config;
+    report_set_result(report, TEST_SKIP, "Invalid command test requires low-level task construction");
+    return TEST_SKIP;
+}
+
+/* TC-009: Command to Invalid LUN */
+static test_result_t test_invalid_lun(struct iscsi_context *unused_iscsi,
+                                       test_config_t *config,
+                                       test_report_t *report) {
+    struct iscsi_context *iscsi;
+    struct scsi_task *task;
+    uint64_t invalid_lun = 999; /* Highly unlikely to exist */
+
+    (void)unused_iscsi;
+
+    if (!config->iqn || strlen(config->iqn) == 0) {
+        report_set_result(report, TEST_SKIP, "No IQN specified");
+        return TEST_SKIP;
+    }
+
+    iscsi = create_iscsi_context_for_test(config);
+    if (!iscsi || iscsi_connect_target(iscsi, config) != 0) {
+        report_set_result(report, TEST_ERROR, "Failed to connect");
+        if (iscsi) iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* Try to send INQUIRY to invalid LUN */
+    task = iscsi_inquiry_sync(iscsi, invalid_lun, 0, 0, 255);
+
+    if (!task) {
+        report_set_result(report, TEST_ERROR, "Failed to send command to invalid LUN");
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_ERROR;
+    }
+
+    /* Target should reject with CHECK CONDITION */
+    if (task->status == SCSI_STATUS_GOOD) {
+        report_set_result(report, TEST_FAIL, "Target accepted command to invalid LUN");
+        scsi_free_scsi_task(task);
+        iscsi_disconnect_target(iscsi);
+        iscsi_destroy_context(iscsi);
+        return TEST_FAIL;
+    }
+
+    scsi_free_scsi_task(task);
+    iscsi_disconnect_target(iscsi);
+    iscsi_destroy_context(iscsi);
+
+    report_set_result(report, TEST_PASS, NULL);
+    return TEST_PASS;
 }
 
 /* Test definitions */
@@ -179,11 +319,11 @@ static test_def_t command_tests[] = {
     {"TC-002", "TEST UNIT READY", "SCSI Command Tests", test_unit_ready},
     {"TC-003", "READ CAPACITY (10)", "SCSI Command Tests", test_read_capacity10},
     {"TC-004", "READ CAPACITY (16)", "SCSI Command Tests", test_read_capacity16},
-    {"TC-005", "MODE SENSE", "SCSI Command Tests", test_skip_placeholder},
-    {"TC-006", "REQUEST SENSE", "SCSI Command Tests", test_skip_placeholder},
-    {"TC-007", "REPORT LUNS", "SCSI Command Tests", test_skip_placeholder},
-    {"TC-008", "Invalid Command", "SCSI Command Tests", test_skip_placeholder},
-    {"TC-009", "Command to Invalid LUN", "SCSI Command Tests", test_skip_placeholder},
+    {"TC-005", "MODE SENSE", "SCSI Command Tests", test_mode_sense},
+    {"TC-006", "REQUEST SENSE", "SCSI Command Tests", test_request_sense},
+    {"TC-007", "REPORT LUNS", "SCSI Command Tests", test_report_luns},
+    {"TC-008", "Invalid Command", "SCSI Command Tests", test_invalid_command},
+    {"TC-009", "Command to Invalid LUN", "SCSI Command Tests", test_invalid_lun},
 };
 
 /* Register all tests */
