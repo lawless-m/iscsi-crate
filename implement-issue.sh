@@ -177,8 +177,51 @@ if command -v claude &> /dev/null; then
 
     # Test gating: Only close issue if tests pass
     if [ $CLAUDE_EXIT_CODE -eq 0 ]; then
+        # Detect if this is a test implementation issue
+        IS_TEST_IMPL=false
+        if echo "$ISSUE_TITLE" | grep -iE "(implement|add).*test|test.*implement" > /dev/null; then
+            IS_TEST_IMPL=true
+        fi
+
+        if [ "$IS_TEST_IMPL" = "true" ]; then
+            echo ""
+            echo "🔍 Detected test implementation - validating against TGTD first..."
+            echo "========================================="
+            echo ""
+
+            # For test implementations, validate against TGTD first
+            if [ -f "./validate-against-tgtd.sh" ]; then
+                set +e
+                sudo timeout 60 ./validate-against-tgtd.sh
+                TGTD_EXIT_CODE=$?
+                set -e
+
+                echo ""
+                echo "========================================="
+                echo "TGTD validation finished with exit code: $TGTD_EXIT_CODE"
+                echo "========================================="
+                echo ""
+
+                if [ $TGTD_EXIT_CODE -eq 0 ]; then
+                    echo "✅ TGTD validation passed - test implementation is correct"
+                    echo "   Now testing against our Rust target..."
+                    echo ""
+                elif [ $TGTD_EXIT_CODE -eq 124 ]; then
+                    echo "❌ TGTD validation timed out - test implementation has bugs"
+                    gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Test implementation timed out against TGTD (reference implementation). The test code itself has bugs. Exit code: 124"
+                    exit 1
+                else
+                    echo "❌ TGTD validation failed - test implementation has bugs"
+                    gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Test implementation failed against TGTD (reference implementation). The test code itself has bugs. Exit code: $TGTD_EXIT_CODE"
+                    exit 1
+                fi
+            else
+                echo "⚠️ validate-against-tgtd.sh not found, skipping TGTD validation"
+            fi
+        fi
+
         echo ""
-        echo "Running tests..."
+        echo "Running tests against our target..."
         echo "========================================="
 
         set +e
@@ -196,8 +239,13 @@ if command -v claude &> /dev/null; then
             echo "✅ Tests passed! Closing issue #$ISSUE_NUM"
             gh issue close --repo lawless-m/iscsi-crate $ISSUE_NUM --comment "Implementation complete and all tests pass. ✅"
         elif [ $TEST_EXIT_CODE -eq 124 ]; then
-            echo "❌ Tests timed out (exit $TEST_EXIT_CODE). Leaving issue open."
-            gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation introduced a timeout (exit code 124). Tests hung after 30 seconds. Leaving issue open for debugging."
+            if [ "$IS_TEST_IMPL" = "true" ]; then
+                echo "❌ Our target timed out (but TGTD passed) - this is a target bug, not a test bug"
+                gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Test passed against TGTD but our Rust target timed out (exit 124). This indicates our target has a bug handling these inputs. Leaving issue open for target fixes."
+            else
+                echo "❌ Tests timed out (exit $TEST_EXIT_CODE). Leaving issue open."
+                gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation introduced a timeout (exit code 124). Tests hung after 30 seconds. Leaving issue open for debugging."
+            fi
         else
             echo "❌ Tests failed (exit $TEST_EXIT_CODE). Leaving issue open."
             gh issue comment --repo lawless-m/iscsi-crate $ISSUE_NUM --body "⚠️ Implementation complete but tests failed with exit code $TEST_EXIT_CODE. Leaving issue open for fixes."
