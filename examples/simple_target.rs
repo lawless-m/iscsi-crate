@@ -83,6 +83,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
 
+    // Read bind address from command-line argument or use default (standard iSCSI port)
+    let bind_addr = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "0.0.0.0:3260".to_string());
+
     // Create 100 MB in-memory storage with 512-byte blocks
     let storage = MemoryStorage::new(100, 512);
 
@@ -95,18 +100,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build and configure the target
     let target = IscsiTarget::builder()
-        .bind_addr("0.0.0.0:3261")
+        .bind_addr(&bind_addr)
         .target_name("iqn.2025-12.local:storage.memory-disk")
         .build(storage)?;
 
     println!("\niSCSI target configured:");
     println!("  Target name: iqn.2025-12.local:storage.memory-disk");
-    println!("  Listen address: 0.0.0.0:3261");
+    println!("  Listen address: {}", bind_addr);
+    // Extract port for help text
+    let port = bind_addr.split(':').nth(1).unwrap_or("3260");
+
     println!("\nTo connect from Linux:");
-    println!("  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:3261");
-    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --login");
+    println!("  sudo iscsiadm -m discovery -t sendtargets -p 127.0.0.1:{}", port);
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:{} --login", port);
     println!("\nTo disconnect:");
-    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:3261 --logout");
+    println!("  sudo iscsiadm -m node -T iqn.2025-12.local:storage.memory-disk -p 127.0.0.1:{} --logout", port);
     println!("\nStarting iSCSI target server...\n");
 
     // Run the target

@@ -13,6 +13,54 @@ use iscsi_target::{IscsiClient, IscsiTarget, ScsiBlockDevice, ScsiResult};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use once_cell::sync::Lazy;
+use std::env;
+
+// ============================================================================
+// Test Configuration Module
+// ============================================================================
+
+#[derive(Debug)]
+struct TestConfig {
+    target_addr: String,
+}
+
+static TEST_CONFIG: Lazy<TestConfig> = Lazy::new(|| {
+    // Check environment variable first (highest priority)
+    if let Ok(addr) = env::var("ISCSI_TEST_TARGET") {
+        eprintln!("Using target address from ISCSI_TEST_TARGET: {}", addr);
+        return TestConfig { target_addr: addr };
+    }
+
+    // Try to load from test-config.toml
+    if let Ok(contents) = std::fs::read_to_string("test-config.toml") {
+        if let Ok(config) = contents.parse::<toml::Value>() {
+            if let Some(portal) = config.get("target")
+                .and_then(|t| t.get("portal"))
+                .and_then(|p| p.as_str()) {
+                eprintln!("Using target address from test-config.toml: {}", portal);
+                return TestConfig {
+                    target_addr: portal.to_string()
+                };
+            }
+        }
+    }
+
+    // Fallback to default (standard iSCSI port)
+    let default = target_addr().to_string();
+    eprintln!("Using default target address: {}", default);
+    TestConfig {
+        target_addr: default
+    }
+});
+
+fn target_addr() -> &'static str {
+    &TEST_CONFIG.target_addr
+}
+
+// ============================================================================
+// Test Storage Implementation
+// ============================================================================
 
 /// Simple in-memory storage for testing
 struct TestStorage {
@@ -63,7 +111,7 @@ impl ScsiBlockDevice for TestStorage {
 fn start_test_target() -> Result<std::thread::JoinHandle<()>, Box<dyn std::error::Error>> {
     let storage = TestStorage::new(100); // 100 MB
     let target = IscsiTarget::builder()
-        .bind_addr("127.0.0.1:3260")
+        .bind_addr(target_addr())
         .target_name("iqn.2025-12.local:storage.disk1")
         .build(storage)?;
 
@@ -85,7 +133,7 @@ fn start_test_target() -> Result<std::thread::JoinHandle<()>, Box<dyn std::error
 fn test_client_connect_and_login() {
     // This test connects to localhost:3260 and performs login
     // Start target first: cargo run --example simple_target
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             assert!(!client.is_logged_in());
 
@@ -109,7 +157,7 @@ fn test_client_connect_and_login() {
 #[test]
 #[ignore]
 fn test_client_sequence_numbers() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             let initial_cmd_sn = client.cmd_sn();
             assert_eq!(initial_cmd_sn, 0);
@@ -140,7 +188,7 @@ fn test_client_sequence_numbers() {
 fn test_raw_pdu_transmission() {
     use iscsi_target::pdu::IscsiPdu;
 
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             // Create and send a custom PDU
             let mut pdu = IscsiPdu::new();
@@ -173,7 +221,7 @@ fn test_raw_pdu_transmission() {
 #[test]
 #[ignore]
 fn test_discovery_basic() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(_client) => {
             // In a real discovery test, we would:
             // 1. Set session type to DISCOVERY
@@ -188,7 +236,7 @@ fn test_discovery_basic() {
 #[test]
 #[ignore]
 fn test_login_basic() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             match client.login(
                 "iqn.2025-12.local:initiator",
@@ -209,7 +257,7 @@ fn test_login_basic() {
 #[test]
 #[ignore]
 fn test_scsi_inquiry() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -241,7 +289,7 @@ fn test_scsi_inquiry() {
 #[test]
 #[ignore]
 fn test_scsi_read_capacity() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -274,7 +322,7 @@ fn test_scsi_read_capacity() {
 #[test]
 #[ignore]
 fn test_scsi_test_unit_ready() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -304,7 +352,7 @@ fn test_scsi_test_unit_ready() {
 #[test]
 #[ignore]
 fn test_scsi_mode_sense() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -334,7 +382,7 @@ fn test_scsi_mode_sense() {
 #[test]
 #[ignore]
 fn test_scsi_report_luns() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -364,7 +412,7 @@ fn test_scsi_report_luns() {
 #[test]
 #[ignore]
 fn test_scsi_invalid_command() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -395,7 +443,7 @@ fn test_scsi_invalid_command() {
 #[test]
 #[ignore]
 fn test_scsi_invalid_lun() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -438,7 +486,7 @@ fn test_scsi_invalid_lun() {
 #[test]
 #[ignore]
 fn test_io_single_block_read() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -473,7 +521,7 @@ fn test_io_single_block_read() {
 #[test]
 #[ignore]
 fn test_io_single_block_write() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -504,7 +552,7 @@ fn test_io_single_block_write() {
 #[test]
 #[ignore]
 fn test_io_data_integrity() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client
                 .login(
@@ -549,7 +597,7 @@ fn test_io_data_integrity() {
 #[test]
 #[ignore]
 fn test_io_multi_block_sequential_read() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=0, blocks=4
@@ -572,7 +620,7 @@ fn test_io_multi_block_sequential_read() {
 #[test]
 #[ignore]
 fn test_io_multi_block_sequential_write() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let data = vec![0xAA; 2048]; // 4 blocks
@@ -593,7 +641,7 @@ fn test_io_multi_block_sequential_write() {
 #[test]
 #[ignore]
 fn test_io_random_access_reads() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // Read from various LBAs: 0, 10, 100, 1000
@@ -619,7 +667,7 @@ fn test_io_random_access_reads() {
 #[test]
 #[ignore]
 fn test_io_random_access_writes() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let data = vec![0xBB; 512];
@@ -643,7 +691,7 @@ fn test_io_random_access_writes() {
 #[test]
 #[ignore]
 fn test_io_large_transfer_read() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=0, blocks=64 (32 KB)
@@ -666,7 +714,7 @@ fn test_io_large_transfer_read() {
 #[test]
 #[ignore]
 fn test_io_large_transfer_write() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let data = vec![0xCC; 32768]; // 64 blocks
@@ -687,7 +735,7 @@ fn test_io_large_transfer_write() {
 #[test]
 #[ignore]
 fn test_io_zero_length_transfer() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=0, blocks=0
@@ -707,7 +755,7 @@ fn test_io_zero_length_transfer() {
 #[test]
 #[ignore]
 fn test_io_maximum_transfer_size() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=0, blocks=256 (128 KB - typical max)
@@ -730,7 +778,7 @@ fn test_io_maximum_transfer_size() {
 #[test]
 #[ignore]
 fn test_io_beyond_maximum_transfer() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=0, blocks=512 (256 KB - likely beyond max)
@@ -750,7 +798,7 @@ fn test_io_beyond_maximum_transfer() {
 #[test]
 #[ignore]
 fn test_io_unaligned_access() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // READ (10): LBA=1 (odd LBA), blocks=3
@@ -773,7 +821,7 @@ fn test_io_unaligned_access() {
 #[test]
 #[ignore]
 fn test_io_write_read_verify_pattern() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let pattern = (0..512).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
@@ -807,7 +855,7 @@ fn test_io_write_read_verify_pattern() {
 #[test]
 #[ignore]
 fn test_io_overwrite() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // Write pattern 1
@@ -847,7 +895,7 @@ fn test_io_overwrite() {
 #[ignore]
 fn test_stress_rapid_login_logout() {
     for i in 0..10 {
-        match IscsiClient::connect("127.0.0.1:3260") {
+        match IscsiClient::connect(target_addr()) {
             Ok(mut client) => {
                 if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                     let _ = client.logout();
@@ -869,7 +917,7 @@ fn test_stress_rapid_login_logout() {
 #[test]
 #[ignore]
 fn test_stress_sustained_io() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let data = vec![0xDD; 512];
@@ -898,7 +946,7 @@ fn test_stress_sustained_io() {
 #[test]
 #[ignore]
 fn test_edge_read_at_capacity_boundary() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // First get capacity
@@ -940,7 +988,7 @@ fn test_edge_read_at_capacity_boundary() {
 #[test]
 #[ignore]
 fn test_edge_read_beyond_capacity() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // Try to read at a very high LBA that's definitely beyond capacity
@@ -968,7 +1016,7 @@ fn test_edge_read_beyond_capacity() {
 #[test]
 #[ignore]
 fn test_edge_interleaved_read_write() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 // Write to LBA 0, read from LBA 10, write to LBA 5, read from LBA 0
@@ -1005,7 +1053,7 @@ fn test_edge_interleaved_read_write() {
 #[test]
 #[ignore]
 fn test_edge_multiple_inquiry() {
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
                 let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
@@ -1033,7 +1081,7 @@ fn test_edge_multiple_inquiry() {
 fn test_login_invalid_max_recv_data_size() {
     use iscsi_target::pdu::{IscsiPdu, opcode, flags};
 
-    match IscsiClient::connect("127.0.0.1:3260") {
+    match IscsiClient::connect(target_addr()) {
         Ok(mut client) => {
             // Build login request with invalid MaxRecvDataSegmentLength=0
             let params = "InitiatorName=iqn.test:init\0TargetName=iqn.test:tgt\0AuthMethod=None\0MaxRecvDataSegmentLength=0\0";
