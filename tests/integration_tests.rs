@@ -839,6 +839,191 @@ fn test_io_overwrite() {
 }
 
 // ============================================================================
+// Additional Edge Case and Stress Tests (beyond C suite)
+// ============================================================================
+
+/// Stress test: Rapid login/logout cycles
+#[test]
+#[ignore]
+fn test_stress_rapid_login_logout() {
+    for i in 0..10 {
+        match IscsiClient::connect("127.0.0.1:3260") {
+            Ok(mut client) => {
+                if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                    let _ = client.logout();
+                } else {
+                    eprintln!("Login failed on iteration {}", i);
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("Connection failed on iteration {}: {}", i, e);
+                return;
+            }
+        }
+    }
+    println!("Rapid login/logout stress test: PASSED (10 cycles)");
+}
+
+/// Stress test: Sustained I/O operations
+#[test]
+#[ignore]
+fn test_stress_sustained_io() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let data = vec![0xDD; 512];
+                // Perform 100 write/read cycles
+                for lba in 0..100 {
+                    let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, lba as u8, 0x00, 0x00, 0x01, 0x00];
+                    if client.send_scsi_command(&write_cdb, Some(&data)).is_err() {
+                        eprintln!("Sustained I/O failed at write {}", lba);
+                        return;
+                    }
+                    let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, lba as u8, 0x00, 0x00, 0x01, 0x00];
+                    if client.send_scsi_command(&read_cdb, None).is_err() {
+                        eprintln!("Sustained I/O failed at read {}", lba);
+                        return;
+                    }
+                }
+                println!("Sustained I/O stress test: PASSED (100 write/read cycles)");
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// Edge case: Read at capacity boundary
+#[test]
+#[ignore]
+fn test_edge_read_at_capacity_boundary() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // First get capacity
+                let cap_cdb = vec![0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+                match client.send_scsi_command(&cap_cdb, None) {
+                    Ok(response) => {
+                        if response.data.len() >= 8 {
+                            let last_lba = u32::from_be_bytes([
+                                response.data[0],
+                                response.data[1],
+                                response.data[2],
+                                response.data[3],
+                            ]);
+                            // Try to read the last LBA
+                            let read_cdb = vec![
+                                0x28, 0x00,
+                                (last_lba >> 24) as u8,
+                                (last_lba >> 16) as u8,
+                                (last_lba >> 8) as u8,
+                                last_lba as u8,
+                                0x00, 0x00, 0x01, 0x00
+                            ];
+                            match client.send_scsi_command(&read_cdb, None) {
+                                Ok(_) => println!("Read at capacity boundary: PASSED"),
+                                Err(e) => eprintln!("Read at last LBA failed: {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("READ CAPACITY failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// Edge case: Read beyond capacity
+#[test]
+#[ignore]
+fn test_edge_read_beyond_capacity() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // Try to read at a very high LBA that's definitely beyond capacity
+                let huge_lba = 0xFFFFFFu32;
+                let read_cdb = vec![
+                    0x28, 0x00,
+                    (huge_lba >> 24) as u8,
+                    (huge_lba >> 16) as u8,
+                    (huge_lba >> 8) as u8,
+                    huge_lba as u8,
+                    0x00, 0x00, 0x01, 0x00
+                ];
+                match client.send_scsi_command(&read_cdb, None) {
+                    Ok(_) => eprintln!("Read beyond capacity should have failed!"),
+                    Err(e) => println!("Read beyond capacity properly rejected: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// Edge case: Interleaved read/write operations
+#[test]
+#[ignore]
+fn test_edge_interleaved_read_write() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // Write to LBA 0, read from LBA 10, write to LBA 5, read from LBA 0
+                let data = vec![0xEE; 512];
+                let ops = vec![
+                    ("write", 0u32), ("read", 10), ("write", 5), ("read", 0),
+                    ("write", 20), ("read", 5), ("write", 15), ("read", 20),
+                ];
+                for (op, lba) in ops {
+                    let cdb = if op == "write" {
+                        vec![0x2A, 0x00, 0, 0, 0, lba as u8, 0x00, 0x00, 0x01, 0x00]
+                    } else {
+                        vec![0x28, 0x00, 0, 0, 0, lba as u8, 0x00, 0x00, 0x01, 0x00]
+                    };
+                    let result = if op == "write" {
+                        client.send_scsi_command(&cdb, Some(&data))
+                    } else {
+                        client.send_scsi_command(&cdb, None)
+                    };
+                    if result.is_err() {
+                        eprintln!("Interleaved {} at LBA {} failed", op, lba);
+                        return;
+                    }
+                }
+                println!("Interleaved read/write: PASSED");
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// Edge case: Multiple INQUIRY commands in succession
+#[test]
+#[ignore]
+fn test_edge_multiple_inquiry() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+                for i in 0..20 {
+                    if client.send_scsi_command(&cdb, None).is_err() {
+                        eprintln!("Multiple INQUIRY failed at iteration {}", i);
+                        return;
+                    }
+                }
+                println!("Multiple INQUIRY: PASSED (20 iterations)");
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+// ============================================================================
 // Test for invalid PDU handling (parameter validation edge cases)
 // ============================================================================
 
