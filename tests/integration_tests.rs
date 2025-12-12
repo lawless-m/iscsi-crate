@@ -193,6 +193,22 @@ fn discover_targets(client: &mut IscsiClient) -> Vec<(String, String)> {
         })
 }
 
+/// Helper to create a READ(10) CDB
+fn read10_cdb(lba: u32, num_blocks: u16) -> Vec<u8> {
+    let mut cdb = vec![0x28, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    cdb[2..6].copy_from_slice(&lba.to_be_bytes());
+    cdb[7..9].copy_from_slice(&num_blocks.to_be_bytes());
+    cdb
+}
+
+/// Helper to create a WRITE(10) CDB
+fn write10_cdb(lba: u32, num_blocks: u16) -> Vec<u8> {
+    let mut cdb = vec![0x2A, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    cdb[2..6].copy_from_slice(&lba.to_be_bytes());
+    cdb[7..9].copy_from_slice(&num_blocks.to_be_bytes());
+    cdb
+}
+
 // ============================================================================
 // Test Storage Implementation
 // ============================================================================
@@ -652,66 +668,42 @@ fn test_scsi_invalid_lun() {
 #[test]
 #[ignore]
 fn test_io_single_block_read() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // READ (10): opcode 0x28, LBA=0, blocks=1
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!(
-                            "READ (10) response: opcode=0x{:02x}, data_len={}",
-                            response.opcode, response.data_length
-                        );
-                        // Verify data_length == 512 (one block)
-                        assert_eq!(response.data_length, 512);
-                    }
-                    Err(e) => eprintln!("READ failed: {}", e),
-                }
+    // READ (10): LBA=0, 1 block
+    let cdb = read10_cdb(0, 1);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10)");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data.len(), 512,
+        "Expected 512 bytes (1 block), got {}", response.data.len());
+
+    println!("✓ Single block read successful: {} bytes", response.data.len());
+
+    client.logout().ok();
 }
 
 /// TI-002: Single Block Write
 #[test]
 #[ignore]
 fn test_io_single_block_write() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // WRITE (10): opcode 0x2A, LBA=0, blocks=1
-                let cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00];
-                let data = vec![0xAA; 512]; // Write pattern
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, Some(&data)) {
-                    Ok(response) => {
-                        println!("WRITE (10) response: opcode=0x{:02x}", response.opcode);
-                    }
-                    Err(e) => eprintln!("WRITE failed: {}", e),
-                }
+    // WRITE (10): LBA=0, 1 block with pattern 0xAA
+    let cdb = write10_cdb(0, 1);
+    let data = vec![0xAA; 512];
+    let response = execute_scsi_command(&mut client, &cdb, Some(&data), "WRITE(10)");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    println!("✓ Single block write successful: {} bytes written", data.len());
+
+    client.logout().ok();
 }
 
 /// Test data integrity - Write pattern and read back
