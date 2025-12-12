@@ -78,6 +78,13 @@ int config_parse_file(const char *filename, test_config_t *config) {
         char *key = trim_whitespace(trimmed);
         char *value = trim_whitespace(equals + 1);
 
+        /* Strip quotes from TOML string values */
+        size_t len = strlen(value);
+        if (len >= 2 && value[0] == '"' && value[len-1] == '"') {
+            value[len-1] = '\0';
+            value++;
+        }
+
         /* Parse based on section */
         if (strcmp(section, "target") == 0) {
             if (strcmp(key, "portal") == 0) {
