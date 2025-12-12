@@ -46,12 +46,17 @@ static TEST_CONFIG: Lazy<TestConfig> = Lazy::new(|| {
         }
     }
 
-    // Fallback to default (standard iSCSI port)
-    let default = target_addr().to_string();
-    eprintln!("Using default target address: {}", default);
-    TestConfig {
-        target_addr: default
-    }
+    // No configuration found - fail explicitly
+    panic!(
+        "iSCSI test target address not configured!\n\
+         \n\
+         Please provide target address using one of:\n\
+         1. Environment variable: ISCSI_TEST_TARGET=127.0.0.1:3260\n\
+         2. Config file: Add 'portal = \"127.0.0.1:3260\"' under [target] in test-config.toml\n\
+         \n\
+         Example:\n\
+         ISCSI_TEST_TARGET=127.0.0.1:3260 cargo test --test integration_tests\n"
+    )
 });
 
 fn target_addr() -> &'static str {

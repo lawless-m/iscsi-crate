@@ -1,6 +1,6 @@
 [target]
-portal = 127.0.0.1:3260
-iqn = iqn.2025-12.local:storage.memory-disk
+portal = "127.0.0.1:3261"
+iqn = "iqn.2025-12.local:storage.memory-disk"
 lun = 0
 
 [options]
