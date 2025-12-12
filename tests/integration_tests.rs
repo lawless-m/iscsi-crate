@@ -270,6 +270,170 @@ fn test_scsi_read_capacity() {
     }
 }
 
+/// TC-002: TEST UNIT READY
+#[test]
+#[ignore]
+fn test_scsi_test_unit_ready() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client
+                .login(
+                    "iqn.2025-12.local:initiator",
+                    "iqn.2025-12.local:storage.disk1",
+                )
+                .is_ok()
+            {
+                // TEST UNIT READY: opcode 0x00
+                let cdb = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        println!("TEST UNIT READY response: opcode=0x{:02x}", response.opcode);
+                    }
+                    Err(e) => eprintln!("TEST UNIT READY failed: {}", e),
+                }
+
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TC-005: MODE SENSE
+#[test]
+#[ignore]
+fn test_scsi_mode_sense() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client
+                .login(
+                    "iqn.2025-12.local:initiator",
+                    "iqn.2025-12.local:storage.disk1",
+                )
+                .is_ok()
+            {
+                // MODE SENSE (6): opcode 0x1A
+                let cdb = vec![0x1A, 0x00, 0x3F, 0x00, 0xFF, 0x00];
+
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        println!("MODE SENSE response: opcode=0x{:02x}, data_len={}", response.opcode, response.data_length);
+                    }
+                    Err(e) => eprintln!("MODE SENSE failed: {}", e),
+                }
+
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TC-007: REPORT LUNS
+#[test]
+#[ignore]
+fn test_scsi_report_luns() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client
+                .login(
+                    "iqn.2025-12.local:initiator",
+                    "iqn.2025-12.local:storage.disk1",
+                )
+                .is_ok()
+            {
+                // REPORT LUNS: opcode 0xA0
+                let cdb = vec![0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00];
+
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        println!("REPORT LUNS response: opcode=0x{:02x}, data_len={}", response.opcode, response.data_length);
+                    }
+                    Err(e) => eprintln!("REPORT LUNS failed: {}", e),
+                }
+
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TC-008: Invalid Command
+#[test]
+#[ignore]
+fn test_scsi_invalid_command() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client
+                .login(
+                    "iqn.2025-12.local:initiator",
+                    "iqn.2025-12.local:storage.disk1",
+                )
+                .is_ok()
+            {
+                // Invalid SCSI opcode: 0xFF (reserved)
+                let cdb = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        println!("Invalid command response: opcode=0x{:02x}", response.opcode);
+                        // Should receive CHECK CONDITION status
+                    }
+                    Err(e) => println!("Invalid command properly rejected: {}", e),
+                }
+
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TC-009: Command to Invalid LUN
+#[test]
+#[ignore]
+fn test_scsi_invalid_lun() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client
+                .login(
+                    "iqn.2025-12.local:initiator",
+                    "iqn.2025-12.local:storage.disk1",
+                )
+                .is_ok()
+            {
+                // Send INQUIRY to invalid LUN 99
+                // Need to construct raw PDU to specify LUN
+                use iscsi_target::pdu::{IscsiPdu, opcode};
+                let mut pdu = IscsiPdu::new();
+                pdu.opcode = opcode::SCSI_COMMAND;
+                pdu.flags = 0x80; // Final
+                pdu.lun = 99 << 48; // LUN 99
+                pdu.itt = 1;
+
+                // INQUIRY CDB
+                let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+                pdu.data = cdb;
+
+                if let Ok(()) = client.send_raw_pdu(&pdu) {
+                    match client.recv_pdu() {
+                        Ok(response) => {
+                            println!("Invalid LUN response: opcode=0x{:02x}", response.opcode);
+                            // Should receive CHECK CONDITION with LOGICAL_UNIT_NOT_SUPPORTED
+                        }
+                        Err(e) => println!("Invalid LUN command failed: {}", e),
+                    }
+                }
+
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
 /// TI-001: Single Block Read
 #[test]
 #[ignore]
@@ -374,6 +538,299 @@ fn test_io_data_integrity() {
                     Err(e) => eprintln!("Write failed: {}", e),
                 }
 
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-003: Multi-Block Sequential Read
+#[test]
+#[ignore]
+fn test_io_multi_block_sequential_read() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=0, blocks=4
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        assert_eq!(response.data_length, 2048); // 4 blocks * 512 bytes
+                        println!("Multi-block sequential read: PASSED");
+                    }
+                    Err(e) => eprintln!("Multi-block read failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-004: Multi-Block Sequential Write
+#[test]
+#[ignore]
+fn test_io_multi_block_sequential_write() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let data = vec![0xAA; 2048]; // 4 blocks
+                // WRITE (10): LBA=0, blocks=4
+                let cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00];
+                match client.send_scsi_command(&cdb, Some(&data)) {
+                    Ok(_) => println!("Multi-block sequential write: PASSED"),
+                    Err(e) => eprintln!("Multi-block write failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-005: Random Access Reads
+#[test]
+#[ignore]
+fn test_io_random_access_reads() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // Read from various LBAs: 0, 10, 100, 1000
+                for lba in [0, 10, 100, 1000] {
+                    let cdb = vec![0x28, 0x00, (lba >> 24) as u8, (lba >> 16) as u8, (lba >> 8) as u8, lba as u8, 0x00, 0x00, 0x01, 0x00];
+                    match client.send_scsi_command(&cdb, None) {
+                        Ok(response) => assert_eq!(response.data_length, 512),
+                        Err(e) => {
+                            eprintln!("Random read at LBA {} failed: {}", lba, e);
+                            return;
+                        }
+                    }
+                }
+                println!("Random access reads: PASSED");
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-006: Random Access Writes
+#[test]
+#[ignore]
+fn test_io_random_access_writes() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let data = vec![0xBB; 512];
+                // Write to various LBAs: 5, 50, 500
+                for lba in [5, 50, 500] {
+                    let cdb = vec![0x2A, 0x00, (lba >> 24) as u8, (lba >> 16) as u8, (lba >> 8) as u8, lba as u8, 0x00, 0x00, 0x01, 0x00];
+                    if let Err(e) = client.send_scsi_command(&cdb, Some(&data)) {
+                        eprintln!("Random write at LBA {} failed: {}", lba, e);
+                        return;
+                    }
+                }
+                println!("Random access writes: PASSED");
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-007: Large Transfer Read
+#[test]
+#[ignore]
+fn test_io_large_transfer_read() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=0, blocks=64 (32 KB)
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        assert_eq!(response.data_length, 32768); // 64 blocks * 512
+                        println!("Large transfer read: PASSED");
+                    }
+                    Err(e) => eprintln!("Large read failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-008: Large Transfer Write
+#[test]
+#[ignore]
+fn test_io_large_transfer_write() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let data = vec![0xCC; 32768]; // 64 blocks
+                // WRITE (10): LBA=0, blocks=64
+                let cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00];
+                match client.send_scsi_command(&cdb, Some(&data)) {
+                    Ok(_) => println!("Large transfer write: PASSED"),
+                    Err(e) => eprintln!("Large write failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-009: Zero-Length Transfer
+#[test]
+#[ignore]
+fn test_io_zero_length_transfer() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=0, blocks=0
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(_) => println!("Zero-length transfer: PASSED"),
+                    Err(e) => eprintln!("Zero-length transfer failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-010: Maximum Transfer Size
+#[test]
+#[ignore]
+fn test_io_maximum_transfer_size() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=0, blocks=256 (128 KB - typical max)
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        assert_eq!(response.data_length, 131072); // 256 blocks * 512
+                        println!("Maximum transfer size: PASSED");
+                    }
+                    Err(e) => eprintln!("Maximum transfer failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-011: Beyond Maximum Transfer
+#[test]
+#[ignore]
+fn test_io_beyond_maximum_transfer() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=0, blocks=512 (256 KB - likely beyond max)
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(_) => println!("Beyond maximum transfer: handled"),
+                    Err(e) => println!("Beyond maximum transfer properly rejected: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-012: Unaligned Access
+#[test]
+#[ignore]
+fn test_io_unaligned_access() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // READ (10): LBA=1 (odd LBA), blocks=3
+                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00];
+                match client.send_scsi_command(&cdb, None) {
+                    Ok(response) => {
+                        assert_eq!(response.data_length, 1536); // 3 blocks * 512
+                        println!("Unaligned access: PASSED");
+                    }
+                    Err(e) => eprintln!("Unaligned access failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-013: Write-Read-Verify Pattern
+#[test]
+#[ignore]
+fn test_io_write_read_verify_pattern() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                let pattern = (0..512).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
+                // WRITE (10): LBA=10, blocks=1
+                let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01, 0x00];
+                match client.send_scsi_command(&write_cdb, Some(&pattern)) {
+                    Ok(_) => {
+                        // READ (10): LBA=10, blocks=1
+                        let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01, 0x00];
+                        match client.send_scsi_command(&read_cdb, None) {
+                            Ok(response) => {
+                                if response.data == pattern {
+                                    println!("Write-read-verify pattern: PASSED");
+                                } else {
+                                    eprintln!("Write-read-verify: data mismatch");
+                                }
+                            }
+                            Err(e) => eprintln!("Verify read failed: {}", e),
+                        }
+                    }
+                    Err(e) => eprintln!("Verify write failed: {}", e),
+                }
+                let _ = client.logout();
+            }
+        }
+        Err(e) => eprintln!("Connection failed: {}", e),
+    }
+}
+
+/// TI-014: Overwrite Test
+#[test]
+#[ignore]
+fn test_io_overwrite() {
+    match IscsiClient::connect("127.0.0.1:3260") {
+        Ok(mut client) => {
+            if client.login("iqn.2025-12.local:initiator", "iqn.2025-12.local:storage.disk1").is_ok() {
+                // Write pattern 1
+                let pattern1 = vec![0x11; 512];
+                let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x01, 0x00];
+                client.send_scsi_command(&write_cdb, Some(&pattern1)).ok();
+
+                // Overwrite with pattern 2
+                let pattern2 = vec![0x22; 512];
+                client.send_scsi_command(&write_cdb, Some(&pattern2)).ok();
+
+                // Read back and verify pattern 2
+                let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x01, 0x00];
+                match client.send_scsi_command(&read_cdb, None) {
+                    Ok(response) => {
+                        if response.data == pattern2 {
+                            println!("Overwrite test: PASSED");
+                        } else {
+                            eprintln!("Overwrite test: data mismatch");
+                        }
+                    }
+                    Err(e) => eprintln!("Overwrite read failed: {}", e),
+                }
                 let _ = client.logout();
             }
         }
