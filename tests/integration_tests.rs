@@ -10,11 +10,10 @@
 //! - Arbitrary PDU transmission (for testing edge cases)
 
 use iscsi_target::{IscsiClient, IscsiTarget, ScsiBlockDevice, ScsiResult};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use iscsi_target::pdu::{opcode, IscsiPdu};
 use once_cell::sync::Lazy;
 use std::env;
+use std::time::Duration;
 
 // ============================================================================
 // Test Configuration Module
@@ -86,6 +85,112 @@ fn initiator_iqn() -> &'static str {
 
 fn target_lun() -> u32 {
     TEST_CONFIG.lun
+}
+
+// ============================================================================
+// Test Helper Functions with Actionable Error Messages
+// ============================================================================
+
+/// Connect to target with helpful error message on failure
+fn connect_to_target() -> IscsiClient {
+    IscsiClient::connect(target_addr())
+        .unwrap_or_else(|e| {
+            let port = target_addr().split(':').nth(1).unwrap_or("3260");
+            panic!(
+                "Failed to connect to iSCSI target at {}\n\
+                 Error: {}\n\
+                 \n\
+                 Troubleshooting:\n\
+                 1. Check if target is running:\n\
+                    lsof -i:{} (Linux)\n\
+                    netstat -an | grep {} (Windows)\n\
+                 \n\
+                 2. For Rust target, start it with:\n\
+                    cargo run --example simple_target -- 0.0.0.0:{}\n\
+                 \n\
+                 3. For TGTD, check with:\n\
+                    sudo tgtadm --mode target --op show\n\
+                 \n\
+                 4. Verify test-config.toml has correct portal address",
+                target_addr(), e, port, port, port
+            )
+        })
+}
+
+/// Login to target with helpful error message on failure
+fn login_to_target(client: &mut IscsiClient) {
+    client.login(initiator_iqn(), target_iqn())
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to login to target\n\
+                 Error: {}\n\
+                 \n\
+                 Configuration:\n\
+                 - Portal: {}\n\
+                 - Target IQN: {}\n\
+                 - Initiator IQN: {}\n\
+                 \n\
+                 Troubleshooting:\n\
+                 1. Verify target IQN is correct - run discovery:\n\
+                    cargo run --example discover_targets -- {}\n\
+                 \n\
+                 2. Check target accepts this initiator IQN\n\
+                 \n\
+                 3. For TGTD, check ACL settings:\n\
+                    sudo tgtadm --mode target --op show\n\
+                 \n\
+                 4. Verify test-config.toml has correct IQNs:\n\
+                    [target]\n\
+                    portal = \"{}\"\n\
+                    iqn = \"{}\"\n\
+                    initiator_iqn = \"{}\"",
+                e, target_addr(), target_iqn(), initiator_iqn(),
+                target_addr(), target_addr(), target_iqn(), initiator_iqn()
+            )
+        })
+}
+
+/// Execute SCSI command with helpful error message on failure
+fn execute_scsi_command(client: &mut IscsiClient, cdb: &[u8], data: Option<&[u8]>, command_name: &str) -> IscsiPdu {
+    client.send_scsi_command(cdb, data)
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} command failed\n\
+                 Error: {}\n\
+                 CDB: {:02x?}\n\
+                 \n\
+                 Troubleshooting:\n\
+                 1. Check if logged in to target\n\
+                 2. Verify target supports this SCSI command\n\
+                 3. Check LUN is valid (current: {})\n\
+                 4. Review target logs for detailed error",
+                command_name, e, cdb, target_lun()
+            )
+        })
+}
+
+/// Perform discovery with helpful error message on failure
+fn discover_targets(client: &mut IscsiClient) -> Vec<(String, String)> {
+    client.discover(initiator_iqn())
+        .unwrap_or_else(|e| {
+            panic!(
+                "Discovery failed\n\
+                 Error: {}\n\
+                 \n\
+                 Configuration:\n\
+                 - Portal: {}\n\
+                 - Initiator IQN: {}\n\
+                 \n\
+                 Troubleshooting:\n\
+                 1. Check if target supports discovery\n\
+                 2. Verify portal address is correct\n\
+                 3. Try manual discovery with iscsiadm:\n\
+                    sudo iscsiadm -m discovery -t sendtargets -p {}\n\
+                 \n\
+                 4. Check target logs for discovery requests",
+                e, target_addr(), initiator_iqn(), target_addr()
+            )
+        })
 }
 
 // ============================================================================
@@ -251,25 +356,43 @@ fn test_raw_pdu_transmission() {
 #[test]
 #[ignore]
 fn test_discovery_basic() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            match client.discover(initiator_iqn()) {
-                Ok(targets) => {
-                    assert!(!targets.is_empty(), "No targets discovered");
+    let mut client = connect_to_target();
+    let targets = discover_targets(&mut client);
 
-                    // Verify we discovered our test target
-                    let found = targets.iter().any(|(iqn, _)| iqn == target_iqn());
-                    assert!(found, "Expected target {} not found in discovery results", target_iqn());
+    assert!(!targets.is_empty(),
+        "No targets discovered at {}\n\
+         \n\
+         This could mean:\n\
+         1. Target is not configured to advertise via discovery\n\
+         2. Target requires authentication for discovery\n\
+         3. Target is in error state\n\
+         \n\
+         Try manual discovery: sudo iscsiadm -m discovery -t sendtargets -p {}",
+        target_addr(), target_addr()
+    );
 
-                    println!("Discovered {} target(s)", targets.len());
-                    for (iqn, addr) in &targets {
-                        println!("  - {} at {}", iqn, addr);
-                    }
-                }
-                Err(e) => panic!("Discovery failed: {}", e),
-            }
-        }
-        Err(e) => panic!("Connection failed: {}", e),
+    // Verify we discovered our expected target
+    let found = targets.iter().any(|(iqn, _)| iqn == target_iqn());
+    assert!(found,
+        "Expected target '{}' not found in discovery results\n\
+         \n\
+         Discovered targets:\n{}\n\
+         \n\
+         This means:\n\
+         1. test-config.toml 'iqn' doesn't match actual target IQN\n\
+         2. Target is advertising different IQN than configured\n\
+         \n\
+         Fix by updating test-config.toml with correct IQN from discovery",
+        target_iqn(),
+        targets.iter()
+            .map(|(iqn, addr)| format!("  - {} at {}", iqn, addr))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    println!("✓ Discovery successful: {} target(s)", targets.len());
+    for (iqn, addr) in &targets {
+        println!("  - {} at {}", iqn, addr);
     }
 }
 
@@ -277,53 +400,81 @@ fn test_discovery_basic() {
 #[test]
 #[ignore]
 fn test_login_basic() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            match client.login(
-                initiator_iqn(),
-                target_iqn(),
-            ) {
-                Ok(()) => {
-                    assert!(client.is_logged_in());
-                    let _ = client.logout();
-                }
-                Err(e) => panic!("Login failed: {}", e),
-            }
-        }
-        Err(e) => panic!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    assert!(client.is_logged_in(),
+        "Client reports not logged in after successful login\n\
+         \n\
+         This is an internal client library bug - login succeeded but\n\
+         is_logged_in() returned false. The client's initialized flag\n\
+         may not be set correctly.");
+
+    client.logout()
+        .unwrap_or_else(|e| {
+            panic!(
+                "Logout failed\n\
+                 Error: {}\n\
+                 \n\
+                 This could mean:\n\
+                 1. Connection was lost\n\
+                 2. Target doesn't support logout properly\n\
+                 3. Session is in invalid state",
+                e
+            )
+        });
+
+    println!("✓ Login and logout successful");
 }
 
 /// TC-001: INQUIRY Command (SCSI)
 #[test]
 #[ignore]
 fn test_scsi_inquiry() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // INQUIRY command: opcode 0x12, flags 0x00, length 255
-                let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        // Verify response is successful
-                        // In real test, would check response data
-                        println!("INQUIRY response: opcode=0x{:02x}", response.opcode);
-                    }
-                    Err(e) => eprintln!("INQUIRY failed: {}", e),
-                }
+    // INQUIRY command: opcode 0x12, flags 0x00, allocation length 255
+    let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+    let response = execute_scsi_command(&mut client, &cdb, None, "INQUIRY");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    // Validate response PDU opcode
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response (0x21), got 0x{:02x}\n\
+         \n\
+         This means the target sent wrong PDU type in response to INQUIRY.\n\
+         Target may have protocol implementation error.",
+        response.opcode
+    );
+
+    // Validate we got data back
+    assert!(!response.data.is_empty(),
+        "INQUIRY response has no data\n\
+         \n\
+         SCSI INQUIRY must return device information (minimum 36 bytes).\n\
+         Target may not properly support INQUIRY command."
+    );
+
+    // Basic INQUIRY response validation (should be at least 36 bytes)
+    assert!(response.data.len() >= 36,
+        "INQUIRY response too short: {} bytes (minimum 36 expected)\n\
+         \n\
+         Standard INQUIRY data format requires at least 36 bytes.\n\
+         Response may be truncated or malformed.",
+        response.data.len()
+    );
+
+    // Extract and display device type
+    let device_type = response.data[0] & 0x1F;
+    let vendor = String::from_utf8_lossy(&response.data[8..16]).trim().to_string();
+    let product = String::from_utf8_lossy(&response.data[16..32]).trim().to_string();
+
+    println!("✓ INQUIRY successful:");
+    println!("  Device Type: 0x{:02x}", device_type);
+    println!("  Vendor:      {}", vendor);
+    println!("  Product:     {}", product);
+
+    client.logout().ok();
 }
 
 /// TC-003: READ CAPACITY
