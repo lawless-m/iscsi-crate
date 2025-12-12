@@ -246,19 +246,30 @@ fn test_raw_pdu_transmission() {
 // Example test categories similar to C test suite
 // ============================================================================
 
-/// TD-001: Basic Discovery (would use SendTargets with libiscsi)
-/// For now, this tests basic connectivity
+/// TD-001: Basic Discovery
+/// Tests iSCSI discovery using SendTargets protocol
 #[test]
 #[ignore]
 fn test_discovery_basic() {
     match IscsiClient::connect(target_addr()) {
-        Ok(_client) => {
-            // In a real discovery test, we would:
-            // 1. Set session type to DISCOVERY
-            // 2. Send SendTargets PDU
-            // 3. Parse response for available targets
+        Ok(mut client) => {
+            match client.discover(initiator_iqn()) {
+                Ok(targets) => {
+                    assert!(!targets.is_empty(), "No targets discovered");
+
+                    // Verify we discovered our test target
+                    let found = targets.iter().any(|(iqn, _)| iqn == target_iqn());
+                    assert!(found, "Expected target {} not found in discovery results", target_iqn());
+
+                    println!("Discovered {} target(s)", targets.len());
+                    for (iqn, addr) in &targets {
+                        println!("  - {} at {}", iqn, addr);
+                    }
+                }
+                Err(e) => panic!("Discovery failed: {}", e),
+            }
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
+        Err(e) => panic!("Connection failed: {}", e),
     }
 }
 

@@ -245,6 +245,210 @@ impl IscsiClient {
         Ok(())
     }
 
+    /// Discover available targets at the connected portal
+    ///
+    /// Performs SendTargets discovery to get a list of available iSCSI targets.
+    ///
+    /// # Arguments
+    ///
+    /// * `initiator_name` - IQN of the initiator
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples containing (target_iqn, target_address)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use iscsi_target::client::IscsiClient;
+    ///
+    /// # fn test() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = IscsiClient::connect("127.0.0.1:3260")?;
+    /// let targets = client.discover("iqn.2025-12.local:initiator")?;
+    /// for (iqn, addr) in targets {
+    ///     println!("Target: {} at {}", iqn, addr);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn discover(&mut self, initiator_name: &str) -> ScsiResult<Vec<(String, String)>> {
+        // Perform discovery login (SessionType=Discovery)
+        self.discovery_login(initiator_name)?;
+
+        // Send SendTargets Text Request
+        let mut params = String::new();
+        params.push_str("SendTargets=All\0");
+        while params.len() % 4 != 0 {
+            params.push('\0');
+        }
+
+        let mut pdu = IscsiPdu::new();
+        pdu.opcode = opcode::TEXT_REQUEST;
+        pdu.flags = flags::FINAL;
+        pdu.itt = self.cmd_sn;
+        // TTT = 0xFFFFFFFF for new request
+        pdu.specific[0..4].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        // CmdSN
+        pdu.specific[4..8].copy_from_slice(&self.cmd_sn.to_be_bytes());
+        // ExpStatSN
+        pdu.specific[8..12].copy_from_slice(&self.exp_stat_sn.to_be_bytes());
+        pdu.data = params.into_bytes();
+
+        // Send text request
+        self.send_pdu(&pdu)?;
+
+        // Receive text response
+        let response = self.recv_pdu()?;
+
+        if response.opcode != opcode::TEXT_RESPONSE {
+            return Err(IscsiError::InvalidPdu(format!(
+                "Expected TEXT_RESPONSE (0x24), got opcode 0x{:02x}",
+                response.opcode
+            )));
+        }
+
+        // Parse response parameters
+        let params = pdu::parse_text_parameters(&response.data)?;
+
+        // Extract target information
+        let mut targets = Vec::new();
+        let mut current_target: Option<String> = None;
+
+        for (key, value) in params {
+            match key.as_str() {
+                "TargetName" => {
+                    current_target = Some(value);
+                }
+                "TargetAddress" => {
+                    if let Some(iqn) = current_target.take() {
+                        // TargetAddress format is "host:port,portal-group-tag"
+                        // We just need the host:port part
+                        let addr = value.split(',').next().unwrap_or(&value).to_string();
+                        targets.push((iqn, addr));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // For discovery sessions, we can just close the connection
+        // (logout not needed - connection will be closed when client is dropped)
+
+        Ok(targets)
+    }
+
+    /// Perform discovery login (SessionType=Discovery)
+    fn discovery_login(&mut self, initiator_name: &str) -> ScsiResult<()> {
+        // Phase 1: Security Negotiation
+        self.discovery_login_phase(
+            initiator_name,
+            flags::CSG_SECURITY_NEG,
+            flags::NSG_LOGIN_OP_NEG,
+            false,
+        )?;
+
+        // Phase 2: Operational Negotiation with SessionType=Discovery
+        self.discovery_login_phase(
+            initiator_name,
+            flags::CSG_LOGIN_OP_NEG,
+            flags::NSG_FULL_FEATURE,
+            true,
+        )?;
+
+        self.initialized = true;
+        Ok(())
+    }
+
+    /// Perform a single discovery login phase
+    fn discovery_login_phase(
+        &mut self,
+        initiator_name: &str,
+        csg: u8,
+        nsg: u8,
+        transit: bool,
+    ) -> ScsiResult<()> {
+        // Build login request parameters
+        let mut params = String::new();
+        params.push_str(&format!("InitiatorName={}\0", initiator_name));
+
+        if csg == flags::CSG_SECURITY_NEG {
+            params.push_str("AuthMethod=None\0");
+            params.push_str("SessionType=Discovery\0");
+        }
+
+        if csg == flags::CSG_LOGIN_OP_NEG {
+            params.push_str("HeaderDigest=None\0");
+            params.push_str("DataDigest=None\0");
+            params.push_str("MaxRecvDataSegmentLength=8192\0");
+            params.push_str("DefaultTime2Wait=2\0");
+            params.push_str("DefaultTime2Retain=20\0");
+            params.push_str("ErrorRecoveryLevel=0\0");
+        }
+
+        // Pad to 4-byte boundary
+        while params.len() % 4 != 0 {
+            params.push('\0');
+        }
+
+        // Create login request PDU
+        let mut pdu = IscsiPdu::new();
+        pdu.opcode = opcode::LOGIN_REQUEST;
+        pdu.immediate = true;
+        pdu.flags = if transit { flags::TRANSIT } else { 0 };
+        pdu.flags |= (csg & 0x03) << 2; // Current stage
+        pdu.flags |= nsg & 0x03;        // Next stage
+        pdu.itt = self.cmd_sn; // Use cmd_sn as itt
+        pdu.specific[0] = 0; // Version max
+        pdu.specific[1] = 0; // Version active
+        pdu.data = params.into_bytes();
+
+        // Send login request
+        self.send_pdu(&pdu)?;
+
+        // Receive login response
+        let response = self.recv_pdu()?;
+
+        // Verify login response
+        if response.opcode != opcode::LOGIN_RESPONSE {
+            return Err(IscsiError::InvalidPdu(format!(
+                "Expected LOGIN_RESPONSE (0x23), got opcode 0x{:02x}",
+                response.opcode
+            )));
+        }
+
+        // Extract status from response
+        let status_class = response.specific[0];
+        let status_detail = response.specific[1];
+
+        if status_class != pdu::login_status::SUCCESS {
+            return Err(IscsiError::Protocol(format!(
+                "Discovery login failed: class=0x{:02x}, detail=0x{:02x}",
+                status_class, status_detail
+            )));
+        }
+
+        // Update sequence numbers from response
+        if response.specific.len() >= 16 {
+            self.exp_stat_sn = u32::from_be_bytes([
+                response.specific[4],
+                response.specific[5],
+                response.specific[6],
+                response.specific[7],
+            ]);
+            self.max_cmd_sn = u32::from_be_bytes([
+                response.specific[8],
+                response.specific[9],
+                response.specific[10],
+                response.specific[11],
+            ]);
+        }
+
+        // Increment cmd_sn for next command
+        self.cmd_sn = self.cmd_sn.wrapping_add(1);
+
+        Ok(())
+    }
+
     /// Send a PDU to the target
     ///
     /// Serializes the PDU to bytes and writes it to the TCP stream.
