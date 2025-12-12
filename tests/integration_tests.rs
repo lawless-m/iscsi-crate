@@ -481,197 +481,171 @@ fn test_scsi_inquiry() {
 #[test]
 #[ignore]
 fn test_scsi_read_capacity() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // READ CAPACITY (10): opcode 0x25
-                let cdb = vec![0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!(
-                            "READ CAPACITY response: opcode=0x{:02x}, data_len={}",
-                            response.opcode, response.data_length
-                        );
-                    }
-                    Err(e) => eprintln!("READ CAPACITY failed: {}", e),
-                }
+    // READ CAPACITY (10): opcode 0x25
+    let cdb = vec![0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ CAPACITY");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    // Validate response
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data.len(), 8,
+        "READ CAPACITY (10) must return 8 bytes, got {}",
+        response.data.len());
+
+    // Parse capacity data (last LBA + block size)
+    let last_lba = u32::from_be_bytes([
+        response.data[0], response.data[1], response.data[2], response.data[3]
+    ]);
+    let block_size = u32::from_be_bytes([
+        response.data[4], response.data[5], response.data[6], response.data[7]
+    ]);
+
+    println!("✓ READ CAPACITY successful:");
+    println!("  Last LBA:    {}", last_lba);
+    println!("  Block Size:  {} bytes", block_size);
+    println!("  Capacity:    {} blocks ({} MB)",
+        last_lba + 1,
+        ((last_lba + 1) as u64 * block_size as u64) / (1024 * 1024));
+
+    client.logout().ok();
 }
 
 /// TC-002: TEST UNIT READY
 #[test]
 #[ignore]
 fn test_scsi_test_unit_ready() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // TEST UNIT READY: opcode 0x00
-                let cdb = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!("TEST UNIT READY response: opcode=0x{:02x}", response.opcode);
-                    }
-                    Err(e) => eprintln!("TEST UNIT READY failed: {}", e),
-                }
+    // TEST UNIT READY: opcode 0x00
+    let cdb = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let response = execute_scsi_command(&mut client, &cdb, None, "TEST UNIT READY");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    // TEST UNIT READY returns no data (just status)
+    println!("✓ TEST UNIT READY successful - device is ready");
+
+    client.logout().ok();
 }
 
 /// TC-005: MODE SENSE
 #[test]
 #[ignore]
 fn test_scsi_mode_sense() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // MODE SENSE (6): opcode 0x1A
-                let cdb = vec![0x1A, 0x00, 0x3F, 0x00, 0xFF, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!("MODE SENSE response: opcode=0x{:02x}, data_len={}", response.opcode, response.data_length);
-                    }
-                    Err(e) => eprintln!("MODE SENSE failed: {}", e),
-                }
+    // MODE SENSE (6): opcode 0x1A, page code 0x3F (all pages)
+    let cdb = vec![0x1A, 0x00, 0x3F, 0x00, 0xFF, 0x00];
+    let response = execute_scsi_command(&mut client, &cdb, None, "MODE SENSE");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert!(!response.data.is_empty(),
+        "MODE SENSE should return mode parameter data");
+
+    println!("✓ MODE SENSE successful: {} bytes of mode data", response.data.len());
+
+    client.logout().ok();
 }
 
 /// TC-007: REPORT LUNS
 #[test]
 #[ignore]
 fn test_scsi_report_luns() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // REPORT LUNS: opcode 0xA0
-                let cdb = vec![0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!("REPORT LUNS response: opcode=0x{:02x}, data_len={}", response.opcode, response.data_length);
-                    }
-                    Err(e) => eprintln!("REPORT LUNS failed: {}", e),
-                }
+    // REPORT LUNS: opcode 0xA0, allocation length 16 bytes
+    let cdb = vec![0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00];
+    let response = execute_scsi_command(&mut client, &cdb, None, "REPORT LUNS");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert!(response.data.len() >= 8,
+        "REPORT LUNS must return at least 8 bytes (LUN list header), got {}",
+        response.data.len());
+
+    // Parse LUN list length (first 4 bytes after reserved field)
+    let lun_list_length = u32::from_be_bytes([
+        response.data[0], response.data[1], response.data[2], response.data[3]
+    ]) as usize;
+
+    let num_luns = lun_list_length / 8;
+    println!("✓ REPORT LUNS successful: {} LUN(s) reported", num_luns);
+
+    client.logout().ok();
 }
 
 /// TC-008: Invalid Command
+/// Tests that target properly rejects invalid SCSI commands
 #[test]
 #[ignore]
 fn test_scsi_invalid_command() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // Invalid SCSI opcode: 0xFF (reserved)
-                let cdb = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        println!("Invalid command response: opcode=0x{:02x}", response.opcode);
-                        // Should receive CHECK CONDITION status
-                    }
-                    Err(e) => println!("Invalid command properly rejected: {}", e),
-                }
+    // Invalid SCSI opcode: 0xFF (vendor-specific/reserved)
+    let cdb = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00];
 
-                let _ = client.logout();
-            }
+    // Target should either:
+    // 1. Return SCSI Response with CHECK CONDITION status
+    // 2. Return an error
+    match client.send_scsi_command(&cdb, None) {
+        Ok(response) => {
+            assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+                "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+            println!("✓ Invalid command handled - target returned response (may contain CHECK CONDITION)");
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
+        Err(e) => {
+            println!("✓ Invalid command properly rejected: {}", e);
+        }
     }
+
+    client.logout().ok();
 }
 
 /// TC-009: Command to Invalid LUN
+/// Tests that target properly rejects commands to non-existent LUNs
 #[test]
 #[ignore]
 fn test_scsi_invalid_lun() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // Send INQUIRY to invalid LUN 99
-                // Need to construct raw PDU to specify LUN
-                use iscsi_target::pdu::{IscsiPdu, opcode};
-                let mut pdu = IscsiPdu::new();
-                pdu.opcode = opcode::SCSI_COMMAND;
-                pdu.flags = 0x80; // Final
-                pdu.lun = 99 << 48; // LUN 99
-                pdu.itt = 1;
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                // INQUIRY CDB
-                let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
-                pdu.data = cdb;
+    // Send INQUIRY to invalid LUN 99
+    // Need to construct raw PDU to specify LUN
+    let mut pdu = IscsiPdu::new();
+    pdu.opcode = opcode::SCSI_COMMAND;
+    pdu.flags = 0x80; // Final
+    pdu.lun = 99 << 48; // LUN 99 (invalid - should be LUN 0)
+    pdu.itt = 1;
 
-                if let Ok(()) = client.send_raw_pdu(&pdu) {
-                    match client.recv_pdu() {
-                        Ok(response) => {
-                            println!("Invalid LUN response: opcode=0x{:02x}", response.opcode);
-                            // Should receive CHECK CONDITION with LOGICAL_UNIT_NOT_SUPPORTED
-                        }
-                        Err(e) => println!("Invalid LUN command failed: {}", e),
-                    }
-                }
+    // INQUIRY CDB
+    let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+    pdu.data = cdb;
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    client.send_raw_pdu(&pdu)
+        .expect("Failed to send raw PDU to invalid LUN");
+
+    let response = client.recv_pdu()
+        .expect("Failed to receive response from invalid LUN command");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    println!("✓ Invalid LUN command handled - target returned response");
+    println!("  (Should contain CHECK CONDITION with LOGICAL_UNIT_NOT_SUPPORTED sense code)");
+
+    client.logout().ok();
 }
 
 /// TI-001: Single Block Read
