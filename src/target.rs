@@ -23,7 +23,13 @@ pub struct IscsiTarget<D: ScsiBlockDevice> {
     target_alias: String,
     device: Arc<Mutex<D>>,
     running: Arc<AtomicBool>,
+    shutting_down: Arc<AtomicBool>,
     auth_config: crate::auth::AuthConfig,
+    max_connections: u32,
+    active_connections: Arc<std::sync::atomic::AtomicUsize>,
+    max_sessions: u32,
+    active_sessions: Arc<std::sync::atomic::AtomicUsize>,
+    allowed_initiators: Option<Vec<String>>,
 }
 
 impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
@@ -35,7 +41,7 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
     /// Run the iSCSI target server
     ///
     /// This blocks the current thread and processes incoming connections.
-    pub fn run(self) -> ScsiResult<()> {
+    pub fn run(&self) -> ScsiResult<()> {
         log::info!("iSCSI target starting on {}", self.bind_addr);
         log::info!("Target name: {}", self.target_name);
 
@@ -55,17 +61,57 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
                 Ok((stream, addr)) => {
                     log::info!("New connection from {}", addr);
 
+                    // Check connection limit
+                    let current = self.active_connections.fetch_add(1, Ordering::SeqCst);
+                    if current >= self.max_connections as usize {
+                        log::warn!("Connection rejected from {}: too many connections ({}/{})",
+                            addr, current + 1, self.max_connections);
+                        self.active_connections.fetch_sub(1, Ordering::SeqCst);
+
+                        // Send TOO_MANY_CONNECTIONS reject and close
+                        let _ = send_connection_limit_reject(stream);
+                        continue;
+                    }
+
+                    log::debug!("Accepted connection from {} ({}/{} active)",
+                        addr, current + 1, self.max_connections);
+
                     let device = Arc::clone(&self.device);
                     let target_name = self.target_name.clone();
                     let target_alias = self.target_alias.clone();
                     let auth_config = self.auth_config.clone();
                     let running = Arc::clone(&self.running);
+                    let shutting_down = Arc::clone(&self.shutting_down);
+                    let active_connections = Arc::clone(&self.active_connections);
+                    let max_sessions = self.max_sessions;
+                    let active_sessions = Arc::clone(&self.active_sessions);
+                    let allowed_initiators = self.allowed_initiators.clone();
 
                     thread::spawn(move || {
-                        if let Err(e) = handle_connection(stream, device, &target_name, &target_alias, auth_config, running) {
-                            log::error!("Connection error from {}: {}", addr, e);
-                        }
+                        let session_entered = handle_connection(
+                            stream,
+                            device,
+                            &target_name,
+                            &target_alias,
+                            auth_config,
+                            running,
+                            shutting_down,
+                            max_sessions,
+                            Arc::clone(&active_sessions),
+                            allowed_initiators,
+                        ).unwrap_or(false); // Returns true if session was established
+
                         log::info!("Connection closed from {}", addr);
+
+                        // Decrement connection count
+                        let prev = active_connections.fetch_sub(1, Ordering::SeqCst);
+                        log::debug!("Connection count: {} -> {}", prev, prev - 1);
+
+                        // Decrement session count if a session was established
+                        if session_entered {
+                            let prev = active_sessions.fetch_sub(1, Ordering::SeqCst);
+                            log::debug!("Session count: {} -> {}", prev, prev - 1);
+                        }
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -82,8 +128,36 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
         Ok(())
     }
 
-    /// Signal the server to stop
+    /// Get the current number of active connections
+    pub fn active_connection_count(&self) -> usize {
+        self.active_connections.load(Ordering::SeqCst)
+    }
+
+    /// Get the current number of active sessions
+    pub fn active_session_count(&self) -> usize {
+        self.active_sessions.load(Ordering::SeqCst)
+    }
+
+    /// Initiate graceful shutdown - reject new logins but allow existing sessions to complete
+    ///
+    /// This sets the target into "shutting down" mode where:
+    /// - New login attempts are rejected with SERVICE_UNAVAILABLE (0x0301)
+    /// - Existing sessions can continue to operate normally
+    /// - The server continues to run until stop() is called
+    ///
+    /// This is useful for maintenance or when preparing to shut down the target cleanly.
+    pub fn shutdown_gracefully(&self) {
+        log::info!("Initiating graceful shutdown - new logins will be rejected");
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    /// Signal the server to stop immediately
+    ///
+    /// This stops the accept loop and will cause the server to exit.
+    /// For a cleaner shutdown, call shutdown_gracefully() first to reject new logins,
+    /// wait for sessions to complete, then call stop().
     pub fn stop(&self) {
+        log::info!("Stopping iSCSI target server");
         self.running.store(false, Ordering::SeqCst);
     }
 
@@ -91,6 +165,34 @@ impl<D: ScsiBlockDevice + Send + 'static> IscsiTarget<D> {
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+
+    /// Check if the server is in graceful shutdown mode
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
+    }
+}
+
+/// Send TOO_MANY_CONNECTIONS reject to a new connection
+fn send_connection_limit_reject(mut stream: TcpStream) -> ScsiResult<()> {
+    // Set short timeout for this rejection
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+
+    // Try to read login request to get ITT
+    let mut bhs = [0u8; 48];
+    if stream.read_exact(&mut bhs).is_ok() {
+        let itt = u32::from_be_bytes([bhs[16], bhs[17], bhs[18], bhs[19]]);
+
+        // Create login reject with TOO_MANY_CONNECTIONS (0x0206)
+        let session = crate::session::IscsiSession::new();
+        if let Ok(reject_pdu) = session.create_too_many_connections_reject(itt) {
+            let _ = write_pdu(&mut stream, &reject_pdu);
+        }
+    }
+
+    // Close connection
+    let _ = stream.shutdown(Shutdown::Both);
+    Ok(())
 }
 
 /// Handle a single iSCSI connection
@@ -101,7 +203,11 @@ fn handle_connection<D: ScsiBlockDevice>(
     target_alias: &str,
     auth_config: crate::auth::AuthConfig,
     running: Arc<AtomicBool>,
-) -> ScsiResult<()> {
+    shutting_down: Arc<AtomicBool>,
+    max_sessions: u32,
+    active_sessions: Arc<std::sync::atomic::AtomicUsize>,
+    allowed_initiators: Option<Vec<String>>,
+) -> ScsiResult<bool> {
     // Get the local address that the client connected to
     let local_addr = stream.local_addr().map_err(IscsiError::Io)?;
     // Set blocking mode and timeouts for the connection
@@ -115,6 +221,10 @@ fn handle_connection<D: ScsiBlockDevice>(
     session.params.target_name = target_name.to_string();
     session.params.target_alias = target_alias.to_string();
     session.set_auth_config(auth_config);
+    session.set_allowed_initiators(allowed_initiators.clone());
+
+    // Track whether this connection established a full session
+    let mut session_entered = false;
 
     // Main connection loop
     while running.load(Ordering::SeqCst) {
@@ -145,7 +255,7 @@ fn handle_connection<D: ScsiBlockDevice>(
         let prev_state = session.state.clone();
         let response = match session.state {
             SessionState::Free | SessionState::SecurityNegotiation | SessionState::LoginOperationalNegotiation => {
-                handle_login_phase(&mut session, &pdu, target_name, &target_address)?
+                handle_login_phase(&mut session, &pdu, target_name, &target_address, &shutting_down, max_sessions, &active_sessions)?
             }
             SessionState::FullFeaturePhase => {
                 handle_full_feature_phase(&mut session, &pdu, &device, target_name, &target_address)?
@@ -165,6 +275,11 @@ fn handle_connection<D: ScsiBlockDevice>(
             log::info!("Session entered FullFeaturePhase, increasing timeout");
             stream.set_read_timeout(Some(Duration::from_secs(300))).ok();
             stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
+
+            // Track that a session was established and increment counter
+            session_entered = true;
+            let count = active_sessions.fetch_add(1, Ordering::SeqCst);
+            log::debug!("Session count: {} -> {}", count, count + 1);
         }
 
         // Send response(s)
@@ -172,11 +287,18 @@ fn handle_connection<D: ScsiBlockDevice>(
             log::debug!("Sending PDU: {} (opcode 0x{:02x})", resp_pdu.opcode_name(), resp_pdu.opcode);
             write_pdu(&mut stream, &resp_pdu)?;
         }
+
+        // If we've transitioned to Logout state, break immediately after sending response
+        // This prevents blocking on the next read_pdu() call with a long timeout
+        if matches!(session.state, SessionState::Logout | SessionState::Failed) {
+            log::info!("Session ending (state: {:?})", session.state);
+            break;
+        }
     }
 
     // Clean shutdown
     let _ = stream.shutdown(Shutdown::Both);
-    Ok(())
+    Ok(session_entered)
 }
 
 /// Read a PDU from the TCP stream
@@ -236,9 +358,38 @@ fn handle_login_phase(
     pdu: &IscsiPdu,
     target_name: &str,
     target_address: &str,
+    shutting_down: &Arc<AtomicBool>,
+    max_sessions: u32,
+    active_sessions: &Arc<std::sync::atomic::AtomicUsize>,
 ) -> ScsiResult<Vec<IscsiPdu>> {
     match pdu.opcode {
         opcode::LOGIN_REQUEST => {
+            // Check if target is shutting down - reject new login attempts
+            if shutting_down.load(Ordering::SeqCst) && session.state == SessionState::Free {
+                log::warn!("Login rejected: target is shutting down");
+                let response = session.create_shutdown_reject(pdu.itt)?;
+                return Ok(vec![response]);
+            }
+
+            // Check session limit - reject if at capacity
+            // Note: We check before processing login, but actual session count is incremented
+            // only when entering FullFeaturePhase (see handle_connection)
+            if session.state == SessionState::Free {
+                let current_sessions = active_sessions.load(Ordering::SeqCst);
+                log::debug!(
+                    "Session limit check: current={}, max={}, state={:?}",
+                    current_sessions, max_sessions, session.state
+                );
+                if current_sessions >= max_sessions as usize {
+                    log::warn!(
+                        "Login rejected: session limit reached ({}/{} active)",
+                        current_sessions, max_sessions
+                    );
+                    let response = session.create_out_of_resources_reject(pdu.itt)?;
+                    return Ok(vec![response]);
+                }
+            }
+
             let response = session.process_login(pdu, target_name)?;
             Ok(vec![response])
         }
@@ -247,9 +398,13 @@ fn handle_login_phase(
             handle_text_request(session, pdu, target_name, target_address)
         }
         _ => {
-            log::warn!("Unexpected opcode 0x{:02x} during login phase", pdu.opcode);
-            // Could send a reject PDU here
-            Ok(vec![])
+            log::warn!(
+                "Invalid opcode 0x{:02x} ({}) during login phase - rejecting with INVALID_REQUEST_DURING_LOGIN",
+                pdu.opcode,
+                pdu.opcode_name()
+            );
+            let response = session.create_invalid_request_during_login_reject(pdu.itt)?;
+            Ok(vec![response])
         }
     }
 }
@@ -840,6 +995,9 @@ pub struct IscsiTargetBuilder<D: ScsiBlockDevice> {
     target_name: Option<String>,
     target_alias: Option<String>,
     auth_config: crate::auth::AuthConfig,
+    max_connections: Option<u32>,
+    max_sessions: Option<u32>,
+    allowed_initiators: Option<Vec<String>>,
     _phantom: std::marker::PhantomData<D>,
 }
 
@@ -850,6 +1008,9 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
             target_name: None,
             target_alias: None,
             auth_config: crate::auth::AuthConfig::None,
+            max_connections: None,
+            max_sessions: None,
+            allowed_initiators: None,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -880,6 +1041,31 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
         self
     }
 
+    /// Set the maximum number of concurrent connections (default: 16)
+    ///
+    /// When this limit is reached, new login attempts will be rejected
+    /// with TOO_MANY_CONNECTIONS (0x0206) status code.
+    pub fn max_connections(mut self, max: u32) -> Self {
+        self.max_connections = Some(max);
+        self
+    }
+
+    /// Set the maximum number of concurrent sessions (default: 256)
+    pub fn max_sessions(mut self, max: u32) -> Self {
+        self.max_sessions = Some(max);
+        self
+    }
+
+    /// Set Access Control List - allowed initiator IQNs (default: allow all)
+    ///
+    /// When set, only the specified initiator IQNs will be allowed to access the target.
+    /// Authentication must still succeed, but then the initiator IQN is checked against this list.
+    /// If the initiator is not in the list, login will be rejected with AUTHORIZATION_FAILURE (0x0202).
+    pub fn allowed_initiators(mut self, initiators: Vec<String>) -> Self {
+        self.allowed_initiators = Some(initiators);
+        self
+    }
+
     /// Build the target with the specified storage device
     pub fn build(self, device: D) -> ScsiResult<IscsiTarget<D>> {
         let bind_addr = self.bind_addr.unwrap_or_else(|| format!("0.0.0.0:{}", ISCSI_PORT));
@@ -895,13 +1081,22 @@ impl<D: ScsiBlockDevice> IscsiTargetBuilder<D> {
             ));
         }
 
+        let max_connections = self.max_connections.unwrap_or(16);
+        let max_sessions = self.max_sessions.unwrap_or(256);
+
         Ok(IscsiTarget {
             bind_addr,
             target_name,
             target_alias,
             device: Arc::new(Mutex::new(device)),
             running: Arc::new(AtomicBool::new(false)),
+            shutting_down: Arc::new(AtomicBool::new(false)),
             auth_config: self.auth_config,
+            max_connections,
+            active_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_sessions,
+            active_sessions: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            allowed_initiators: self.allowed_initiators,
         })
     }
 }

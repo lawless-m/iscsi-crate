@@ -132,6 +132,9 @@ pub struct IscsiPdu {
     pub immediate: bool,
     /// Opcode-specific flags (byte 1)
     pub flags: u8,
+    /// Bytes 2-3: For Login Request this is version info (version_max, version_min)
+    /// For other PDUs this is reserved/opcode-specific
+    pub version_or_reserved: u16,
     /// Total AHS (Additional Header Segment) length (4-byte units)
     pub ahs_length: u8,
     /// Data segment length (bytes)
@@ -159,6 +162,7 @@ impl IscsiPdu {
             opcode: 0,
             immediate: false,
             flags: 0,
+            version_or_reserved: 0,
             ahs_length: 0,
             data_length: 0,
             lun: 0,
@@ -191,8 +195,8 @@ impl IscsiPdu {
         // Byte 1: Flags (opcode-specific)
         let flags = cursor.read_u8().map_err(IscsiError::Io)?;
 
-        // Bytes 2-3: Reserved or opcode-specific
-        let _reserved = cursor.read_u16::<BigEndian>().map_err(IscsiError::Io)?;
+        // Bytes 2-3: For Login Request, this is version info; for others, reserved
+        let version_or_reserved = cursor.read_u16::<BigEndian>().map_err(IscsiError::Io)?;
 
         // Byte 4: Total AHS Length (4-byte units)
         let ahs_length = cursor.read_u8().map_err(IscsiError::Io)?;
@@ -236,6 +240,7 @@ impl IscsiPdu {
             opcode,
             immediate,
             flags,
+            version_or_reserved,
             ahs_length,
             data_length,
             lun,
@@ -263,12 +268,17 @@ impl IscsiPdu {
         // Bytes 2-3: Reserved (opcode-specific)
         // Special case for SCSI Response: bytes 2-3 are Response and Status
         // Special case for SCSI Data-In: byte 3 is Status if S bit is set
+        // Special case for Login Request/Response: bytes 2-3 are version info
         if self.opcode == opcode::SCSI_RESPONSE {
             buf.push(self.specific[0]); // Response (byte 2)
             buf.push(self.specific[1]); // Status (byte 3)
         } else if self.opcode == opcode::SCSI_DATA_IN && (self.flags & 0x01) != 0 {
             buf.push(0); // Reserved (byte 2)
             buf.push(self.specific[27]); // Status (byte 3) if S bit is set
+        } else if self.opcode == opcode::LOGIN_REQUEST || self.opcode == opcode::LOGIN_RESPONSE {
+            // Write version_or_reserved for Login PDUs
+            buf.push((self.version_or_reserved >> 8) as u8); // High byte (version-max or active version)
+            buf.push((self.version_or_reserved & 0xFF) as u8); // Low byte (version-min or reserved)
         } else {
             buf.push(0);
             buf.push(0);
@@ -418,6 +428,10 @@ impl IscsiPdu {
         let cmd_sn = BigEndian::read_u32(&self.specific[4..8]);
         let exp_stat_sn = BigEndian::read_u32(&self.specific[8..12]);
 
+        // Extract version info from bytes 2-3
+        let version_max = (self.version_or_reserved >> 8) as u8;
+        let version_min = (self.version_or_reserved & 0xFF) as u8;
+
         Ok(LoginRequest {
             isid,
             tsih,
@@ -428,6 +442,8 @@ impl IscsiPdu {
             cont,
             csg,
             nsg,
+            version_max,
+            version_min,
             parameters: parse_text_parameters(&self.data)?,
         })
     }
@@ -493,6 +509,8 @@ pub struct LoginRequest {
     pub cont: bool,
     pub csg: u8,
     pub nsg: u8,
+    pub version_max: u8, // RFC 3720: highest version initiator supports
+    pub version_min: u8, // RFC 3720: lowest version initiator supports
     pub parameters: Vec<(String, String)>,
 }
 

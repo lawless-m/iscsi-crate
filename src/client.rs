@@ -50,7 +50,7 @@
 //! # }
 //! ```
 
-use crate::error::{IscsiError, ScsiResult};
+use crate::error::{IscsiError, ScsiResult, decode_login_status};
 use crate::pdu::{self, IscsiPdu, opcode, flags, BHS_SIZE};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -121,7 +121,7 @@ impl IscsiClient {
             false,
         )?;
 
-        // Phase 2: Operational Negotiation
+        // Phase 2: Operational Negotiation (transitions to Full Feature Phase)
         self.login_phase(
             initiator_name,
             target_name,
@@ -130,14 +130,8 @@ impl IscsiClient {
             true,
         )?;
 
-        // Phase 3: Full Feature Phase (transition)
-        self.login_phase(
-            initiator_name,
-            target_name,
-            flags::CSG_FULL_FEATURE,
-            flags::NSG_FULL_FEATURE,
-            true,
-        )?;
+        // After Phase 2 completes with transit=true, we're in Full Feature Phase
+        // No Phase 3 needed - you can't send login PDUs with CSG=3 (FullFeature)
 
         self.initialized = true;
         Ok(())
@@ -209,14 +203,16 @@ impl IscsiClient {
             )));
         }
 
-        // Extract response and status from bytes 2-3 of specific
-        let status_class = response.specific[0];
-        let status_detail = response.specific[1];
+        // Extract response and status from bytes 36-37 of PDU (specific[16-17])
+        // RFC 3720 Section 10.13.4: Status-Class and Status-Detail are at bytes 36-37
+        let status_class = response.specific[16];
+        let status_detail = response.specific[17];
 
         if status_class != pdu::login_status::SUCCESS {
+            let decoded_message = decode_login_status(status_class, status_detail);
             return Err(IscsiError::Protocol(format!(
-                "Login failed: class=0x{:02x}, detail=0x{:02x}",
-                status_class, status_detail
+                "Login failed (class=0x{:02x}, detail=0x{:02x})\n\n{}",
+                status_class, status_detail, decoded_message
             )));
         }
 
@@ -421,9 +417,10 @@ impl IscsiClient {
         let status_detail = response.specific[1];
 
         if status_class != pdu::login_status::SUCCESS {
+            let decoded_message = decode_login_status(status_class, status_detail);
             return Err(IscsiError::Protocol(format!(
-                "Discovery login failed: class=0x{:02x}, detail=0x{:02x}",
-                status_class, status_detail
+                "Discovery login failed (class=0x{:02x}, detail=0x{:02x})\n\n{}",
+                status_class, status_detail, decoded_message
             )));
         }
 

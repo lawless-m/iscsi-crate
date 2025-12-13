@@ -86,6 +86,10 @@ pub struct SessionParams {
     pub target_alias: String,
     /// Initiator alias (optional)
     pub initiator_alias: String,
+
+    // Validation tracking
+    /// Invalid session type received (for error reporting)
+    pub(crate) invalid_session_type: Option<String>,
 }
 
 /// Digest type for header/data
@@ -119,6 +123,7 @@ impl Default for SessionParams {
             initiator_name: String::new(),
             target_alias: String::new(),
             initiator_alias: String::new(),
+            invalid_session_type: None,
         }
     }
 }
@@ -191,6 +196,8 @@ pub struct IscsiSession {
     pub target_chap_state: Option<ChapAuthState>,
     /// Whether CHAP authentication has completed successfully (used to distinguish "never started" from "completed")
     pub chap_completed: bool,
+    /// Access Control List - allowed initiator IQNs (None = allow all)
+    pub allowed_initiators: Option<Vec<String>>,
 }
 
 impl Default for IscsiSession {
@@ -221,6 +228,7 @@ impl IscsiSession {
             chap_state: None,
             target_chap_state: None,
             chap_completed: false,
+            allowed_initiators: None,
         }
     }
 
@@ -267,6 +275,11 @@ impl IscsiSession {
         self.auth_config = auth_config;
     }
 
+    /// Set ACL (Access Control List) for this session
+    pub fn set_allowed_initiators(&mut self, allowed_initiators: Option<Vec<String>>) {
+        self.allowed_initiators = allowed_initiators;
+    }
+
     /// Handle CHAP authentication during security negotiation
     /// Returns (success, response_params)
     fn handle_chap_auth(&mut self, login_params: &[(String, String)]) -> ScsiResult<(bool, Vec<(String, String)>)> {
@@ -291,7 +304,13 @@ impl IscsiSession {
         match &self.auth_config {
             AuthConfig::None => {
                 // No auth required - accept None or CHAP
-                Ok((true, vec![("AuthMethod".to_string(), "None".to_string())]))
+                // Only echo back AuthMethod=None if initiator sent AuthMethod in this PDU
+                // This allows state transitions on subsequent PDUs that don't include AuthMethod
+                if auth_method.is_some() {
+                    Ok((true, vec![("AuthMethod".to_string(), "None".to_string())]))
+                } else {
+                    Ok((true, vec![]))
+                }
             }
             AuthConfig::Chap { credentials } | AuthConfig::MutualChap { target_credentials: credentials, .. } => {
                 // CHAP is required
@@ -347,8 +366,12 @@ impl IscsiSession {
                         if let (Some(username), Some(response_hex)) = (chap_n, chap_r) {
                             // Validate username
                             if username != credentials.username {
-                                log::warn!("CHAP authentication failed: unknown user '{}'", username);
-                                return Err(IscsiError::Auth(format!("Unknown user: {}", username)));
+                                log::warn!("CHAP authentication failed: unknown user '{}' (expected '{}')",
+                                    username, credentials.username);
+                                return Err(IscsiError::Auth(format!(
+                                    "AUTH_FAILURE: Unknown user '{}' - check username in authentication credentials",
+                                    username
+                                )));
                             }
 
                             // Parse and validate response
@@ -357,6 +380,15 @@ impl IscsiSession {
 
                             if chap_state.validate_response(&response, &credentials.secret) {
                                 log::info!("CHAP authentication successful for user '{}'", username);
+
+                                // TODO: Add ACL (Access Control List) check here to return AUTHORIZATION_FAILURE
+                                // if the initiator is authenticated but not authorized for this target.
+                                // Example:
+                                // if !self.check_initiator_acl(&self.params.initiator_name, target_name) {
+                                //     return Err(IscsiError::Auth(
+                                //         "AUTHORIZATION_FAILURE: Initiator authenticated but not in target's ACL".to_string()
+                                //     ));
+                                // }
 
                                 // Check if mutual CHAP is required
                                 if let AuthConfig::MutualChap { initiator_credentials, .. } = &self.auth_config {
@@ -416,12 +448,17 @@ impl IscsiSession {
                                 self.chap_completed = true;
                                 Ok((true, vec![])) // Authenticated successfully (one-way CHAP)
                             } else {
-                                log::warn!("CHAP authentication failed: invalid response for user '{}'", username);
-                                Err(IscsiError::Auth("Invalid CHAP response".to_string()))
+                                log::warn!("CHAP authentication failed: invalid password/secret for user '{}'", username);
+                                Err(IscsiError::Auth(format!(
+                                    "AUTH_FAILURE: Invalid password for user '{}' - CHAP response does not match expected value",
+                                    username
+                                )))
                             }
                         } else {
-                            log::warn!("CHAP authentication failed: missing CHAP_N or CHAP_R");
-                            Err(IscsiError::Auth("Missing CHAP credentials".to_string()))
+                            log::warn!("CHAP authentication failed: missing CHAP_N or CHAP_R parameters");
+                            Err(IscsiError::Auth(
+                                "AUTH_FAILURE: Missing CHAP_N (username) or CHAP_R (response) - initiator must provide credentials".to_string()
+                            ))
                         }
                     } else {
                         // Unexpected state
@@ -430,8 +467,10 @@ impl IscsiSession {
                     }
                 } else {
                     // Initiator must use CHAP but didn't request it
-                    log::warn!("Authentication required but initiator didn't request CHAP");
-                    Err(IscsiError::Auth("CHAP authentication required".to_string()))
+                    log::warn!("Authentication required but initiator didn't request CHAP (AuthMethod missing or wrong)");
+                    Err(IscsiError::Auth(
+                        "AUTH_FAILURE: CHAP authentication required but initiator did not request it - set AuthMethod=CHAP".to_string()
+                    ))
                 }
             }
         }
@@ -451,11 +490,20 @@ impl IscsiSession {
                 self.params.target_name = value.to_string();
             }
             "SessionType" => {
-                self.session_type = if value == "Discovery" {
-                    SessionType::Discovery
-                } else {
-                    SessionType::Normal
-                };
+                // RFC 3720: Only "Discovery" and "Normal" are valid
+                match value {
+                    "Discovery" => {
+                        self.session_type = SessionType::Discovery;
+                    }
+                    "Normal" => {
+                        self.session_type = SessionType::Normal;
+                    }
+                    _ => {
+                        log::warn!("Invalid SessionType '{}' - only 'Discovery' and 'Normal' are supported", value);
+                        // Store invalid session type to reject during login processing
+                        self.params.invalid_session_type = Some(value.to_string());
+                    }
+                }
             }
             "MaxRecvDataSegmentLength" => {
                 if let Ok(v) = value.parse::<u32>() {
@@ -611,6 +659,17 @@ impl IscsiSession {
     pub fn process_login(&mut self, pdu: &IscsiPdu, target_name: &str) -> ScsiResult<IscsiPdu> {
         let login = pdu.parse_login_request()?;
 
+        // Check iSCSI version compatibility - RFC 3720 Section 11.12
+        // Target supports version 0x00 (RFC 3720)
+        const TARGET_VERSION: u8 = 0x00;
+        if TARGET_VERSION < login.version_min || TARGET_VERSION > login.version_max {
+            log::warn!(
+                "Login rejected: version mismatch (initiator: min=0x{:02x}, max=0x{:02x}, target=0x{:02x})",
+                login.version_min, login.version_max, TARGET_VERSION
+            );
+            return self.create_unsupported_version_reject(pdu.itt, login.version_max, login.version_min);
+        }
+
         // First login - initialize session
         if self.state == SessionState::Free {
             self.isid = login.isid;
@@ -626,21 +685,61 @@ impl IscsiSession {
             self.apply_initiator_param(key, value);
         }
 
+        // Validate required parameters - RFC 3720 Section 12
+        let has_initiator_name = login.parameters.iter()
+            .any(|(k, _)| k == "InitiatorName");
+
+        // InitiatorName is required, but only if we haven't already received it
+        // iscsiadm sends it in the first login PDU, then sends follow-up PDUs without it
+        if !has_initiator_name && self.params.initiator_name.is_empty() {
+            log::warn!("Login rejected: missing required InitiatorName parameter");
+            return self.create_login_reject(
+                pdu.itt,
+                pdu::login_status::INITIATOR_ERROR,
+                0x07, // Missing parameter (MISSING_PARAMETER from pdu.rs)
+            );
+        }
+
         // Validate target name for normal sessions
         if self.session_type == SessionType::Normal {
             let requested_target = login.parameters.iter()
                 .find(|(k, _)| k == "TargetName")
                 .map(|(_, v)| v.as_str());
 
+            // TargetName is required for normal sessions, but only on the first login PDU
+            // After that, iscsiadm (and other initiators) may send login PDUs without TargetName
+            // We detect first PDU by checking if ISID has been set yet (it's [0,0,0,0,0,0] initially)
+            let is_first_login = self.isid == [0u8; 6];
+            if requested_target.is_none() && is_first_login {
+                log::warn!("Login rejected: missing required TargetName parameter for normal session");
+                return self.create_login_reject(
+                    pdu.itt,
+                    pdu::login_status::INITIATOR_ERROR,
+                    0x07, // Missing parameter
+                );
+            }
+
+            // If TargetName is provided in this PDU, validate it matches our target
             if let Some(req_name) = requested_target {
                 if req_name != target_name {
+                    log::warn!("Login rejected: target '{}' not found (have: '{}')", req_name, target_name);
                     return self.create_login_reject(
                         pdu.itt,
                         pdu::login_status::INITIATOR_ERROR,
-                        0x03, // Target not found
+                        0x03, // Target not found (TARGET_NOT_FOUND from pdu.rs)
                     );
                 }
             }
+        }
+
+        // Validate SessionType - only "Discovery" and "Normal" are supported (RFC 3720)
+        if let Some(ref invalid_type) = self.params.invalid_session_type {
+            log::warn!("Login rejected: unsupported SessionType '{}' (only 'Discovery' and 'Normal' are valid)", invalid_type);
+            return self.create_login_reject(
+                pdu.itt,
+                pdu::login_status::INITIATOR_ERROR,
+                0x09, // SESSION_TYPE_NOT_SUPPORTED (0x0209)
+            );
         }
 
         // Update stages
@@ -652,7 +751,19 @@ impl IscsiSession {
         // Handle authentication during security negotiation (CSG=0)
         // IMPORTANT: Check auth BEFORE deciding whether to honor transit request
         let auth_complete = if login.csg == 0 {
-            let (auth_success, auth_params) = self.handle_chap_auth(&login.parameters)?;
+            // Handle auth errors by returning login reject PDU instead of propagating error
+            let (auth_success, auth_params) = match self.handle_chap_auth(&login.parameters) {
+                Ok((success, params)) => (success, params),
+                Err(e) => {
+                    // Auth error - send login reject with AUTH_FAILURE status
+                    log::warn!("Login rejected: {}", e);
+                    return self.create_login_reject(
+                        pdu.itt,
+                        pdu::login_status::INITIATOR_ERROR,
+                        0x01, // AUTH_FAILURE (0x0201)
+                    );
+                }
+            };
 
             log::debug!("After handle_chap_auth: auth_success={}, auth_params={:?}", auth_success, auth_params);
 
@@ -690,10 +801,11 @@ impl IscsiSession {
 
             // If authentication required but failed with error, reject the login
             if !auth_success {
+                log::warn!("Login rejected: authentication failed");
                 return self.create_login_reject(
                     pdu.itt,
-                    0x02, // INITIATOR_ERROR
-                    0x01, // Authentication failure
+                    pdu::login_status::INITIATOR_ERROR,
+                    0x01, // AUTH_FAILURE (from pdu.rs)
                 );
             }
 
@@ -704,11 +816,30 @@ impl IscsiSession {
             true
         };
 
+        // Check ACL (Access Control List) after authentication succeeds
+        // This check happens once per session during the first login PDU with auth complete
+        if auth_complete && self.state == SessionState::Free {
+            if let Some(ref allowed) = self.allowed_initiators {
+                let initiator_name = &self.params.initiator_name;
+                if !allowed.contains(initiator_name) {
+                    log::warn!(
+                        "Login rejected: initiator '{}' not in ACL (allowed: {:?})",
+                        initiator_name, allowed
+                    );
+                    return self.create_authorization_failure_reject(pdu.itt);
+                }
+                log::debug!("ACL check passed for initiator '{}'", initiator_name);
+            }
+        }
+
         // Determine response transit flags
         // Only allow transit if authentication is complete (or not required)
         let transit = login.transit && auth_complete;
+        log::debug!("Transition logic: login.transit={}, auth_complete={}, transit={}",
+            login.transit, auth_complete, transit);
         let (response_csg, response_nsg, response_transit) = if transit {
             // Initiator wants to transition and auth is complete
+            log::debug!("Checking transition: CSG={}, NSG={}", login.csg, login.nsg);
             match (login.csg, login.nsg) {
                 (0, 1) => {
                     // Security → Login Op Neg
@@ -818,6 +949,87 @@ impl IscsiSession {
             itt,
             Vec::new(),
         ))
+    }
+
+    /// Create a login reject for graceful shutdown - RFC 3720: SERVICE_UNAVAILABLE (0x0301)
+    ///
+    /// This is used when the target is gracefully shutting down and should reject new login
+    /// attempts while allowing existing sessions to complete their work.
+    pub fn create_shutdown_reject(&self, itt: u32) -> ScsiResult<IscsiPdu> {
+        log::info!("Rejecting login attempt during graceful shutdown with SERVICE_UNAVAILABLE");
+        self.create_login_reject(
+            itt,
+            pdu::login_status::TARGET_ERROR,
+            0x01, // SERVICE_UNAVAILABLE (0x0301)
+        )
+    }
+
+    /// Create a login reject for connection limit - RFC 3720: TOO_MANY_CONNECTIONS (0x0206)
+    ///
+    /// This is used when the target has reached its maximum number of concurrent connections
+    /// and cannot accept new login attempts.
+    pub fn create_too_many_connections_reject(&self, itt: u32) -> ScsiResult<IscsiPdu> {
+        log::info!("Rejecting login attempt due to connection limit with TOO_MANY_CONNECTIONS");
+        self.create_login_reject(
+            itt,
+            pdu::login_status::INITIATOR_ERROR,
+            0x06, // TOO_MANY_CONNECTIONS (0x0206)
+        )
+    }
+
+    /// Create a login reject for invalid request - RFC 3720: INVALID_REQUEST_DURING_LOGIN (0x020B)
+    ///
+    /// This is used when an initiator sends a PDU that is not allowed during the login phase,
+    /// such as a SCSI command before login completes or an invalid opcode.
+    pub fn create_invalid_request_during_login_reject(&self, itt: u32) -> ScsiResult<IscsiPdu> {
+        log::warn!("Rejecting login due to invalid request during login phase (INVALID_REQUEST_DURING_LOGIN)");
+        self.create_login_reject(
+            itt,
+            pdu::login_status::INITIATOR_ERROR,
+            0x0B, // INVALID_REQUEST_DURING_LOGIN (0x020B)
+        )
+    }
+
+    /// Create a login reject for unsupported version - RFC 3720: UNSUPPORTED_VERSION (0x0205)
+    ///
+    /// This is used when the initiator's version range doesn't include the version supported by the target.
+    /// The target supports iSCSI version 0x00 (RFC 3720).
+    pub fn create_unsupported_version_reject(&self, itt: u32, version_max: u8, version_min: u8) -> ScsiResult<IscsiPdu> {
+        log::warn!(
+            "Rejecting login due to unsupported version (initiator: max={}, min={}, target: 0x00)",
+            version_max, version_min
+        );
+        self.create_login_reject(
+            itt,
+            pdu::login_status::INITIATOR_ERROR,
+            0x05, // UNSUPPORTED_VERSION (0x0205)
+        )
+    }
+
+    /// Create a login reject for authorization failure - RFC 3720: AUTHORIZATION_FAILURE (0x0202)
+    ///
+    /// This is used when authentication succeeds but the initiator is not authorized
+    /// to access the target (ACL check fails).
+    pub fn create_authorization_failure_reject(&self, itt: u32) -> ScsiResult<IscsiPdu> {
+        log::warn!("Rejecting login due to authorization failure (ACL check failed)");
+        self.create_login_reject(
+            itt,
+            pdu::login_status::INITIATOR_ERROR,
+            0x02, // AUTHORIZATION_FAILURE (0x0202)
+        )
+    }
+
+    /// Create a login reject for resource exhaustion - RFC 3720: OUT_OF_RESOURCES (0x0302)
+    ///
+    /// This is used when the target cannot process the login due to resource constraints
+    /// such as memory allocation failures or session limits.
+    pub fn create_out_of_resources_reject(&self, itt: u32) -> ScsiResult<IscsiPdu> {
+        log::error!("Rejecting login due to resource exhaustion (OUT_OF_RESOURCES)");
+        self.create_login_reject(
+            itt,
+            pdu::login_status::TARGET_ERROR,
+            0x02, // OUT_OF_RESOURCES (0x0302)
+        )
     }
 
     /// Generate a unique TSIH
