@@ -176,13 +176,21 @@ Troubleshooting:
 - [ ] Decode SCSI sense codes with meaning
 - [ ] Add "Common Causes" section for each error type
 
-### Server-Side (To Do)
-- [ ] Return specific login status codes (not just TARGET_NOT_FOUND)
-- [ ] Add detailed error logging with context
-- [ ] Validate all required login parameters
-- [ ] Check ACLs and return AUTHORIZATION_FAILURE when appropriate
-- [ ] Detect authentication issues and return AUTH_FAILURE
-- [ ] Log WHY login failed (for admin debugging)
+### Server-Side (Implemented)
+- [x] Return specific login status codes (TARGET_NOT_FOUND, AUTH_FAILURE, MISSING_PARAMETER)
+- [x] Add detailed error logging with context
+- [x] Validate all required login parameters (InitiatorName, TargetName)
+- [x] Detect authentication issues and return AUTH_FAILURE with detailed messages
+- [x] Log WHY login failed (for admin debugging)
+- [ ] Check ACLs and return AUTHORIZATION_FAILURE when appropriate (TODO: requires ACL implementation)
+
+**Implemented Status Codes:**
+- **0x0203 (TARGET_NOT_FOUND)**: When requested target IQN doesn't match server's target name
+- **0x0207 (MISSING_PARAMETER)**: When InitiatorName or TargetName (for normal sessions) is missing
+- **0x0201 (AUTH_FAILURE)**: When CHAP username is wrong, password is wrong, or CHAP not requested when required
+
+**Future Work:**
+- Implement ACL (Access Control List) system to return 0x0202 (AUTHORIZATION_FAILURE) when initiator is authenticated but not in target's ACL
 
 ### Protocol-Level
 - [ ] Map RFC 3720 status codes to human-readable messages

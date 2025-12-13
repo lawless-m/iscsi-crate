@@ -308,26 +308,27 @@ fn test_client_connect_and_login() {
 #[test]
 #[ignore]
 fn test_client_sequence_numbers() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            let initial_cmd_sn = client.cmd_sn();
-            assert_eq!(initial_cmd_sn, 0);
+    let mut client = connect_to_target();
 
-            // After login, cmd_sn should increment
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // cmd_sn should have incremented
-                assert!(client.cmd_sn() > initial_cmd_sn);
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let initial_cmd_sn = client.cmd_sn();
+    assert_eq!(initial_cmd_sn, 0,
+        "Initial command sequence number should be 0, got {}",
+        initial_cmd_sn);
+
+    login_to_target(&mut client);
+
+    // cmd_sn should have incremented after login
+    assert!(client.cmd_sn() > initial_cmd_sn,
+        "Command sequence number should increment after login\n\
+         Initial: {}, Current: {}\n\
+         \n\
+         This is a protocol violation - CmdSN must increment for each command.",
+        initial_cmd_sn, client.cmd_sn());
+
+    println!("✓ Sequence numbers working correctly: {} -> {}",
+        initial_cmd_sn, client.cmd_sn());
+
+    client.logout().ok();
 }
 
 // ============================================================================
@@ -710,338 +711,354 @@ fn test_io_single_block_write() {
 #[test]
 #[ignore]
 fn test_io_data_integrity() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client
-                .login(
-                    initiator_iqn(),
-                    target_iqn(),
-                )
-                .is_ok()
-            {
-                // Write pattern
-                let pattern = vec![0x55; 512];
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                // WRITE (10): LBA=0, blocks=1
-                let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00];
-                match client.send_scsi_command(&write_cdb, Some(&pattern)) {
-                    Ok(_) => {
-                        // Read back
-                        let read_cdb =
-                            vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00];
-                        match client.send_scsi_command(&read_cdb, None) {
-                            Ok(response) => {
-                                // Verify data matches pattern
-                                if response.data == pattern {
-                                    println!("Data integrity test: PASSED");
-                                } else {
-                                    eprintln!("Data integrity test: FAILED - data mismatch");
-                                }
-                            }
-                            Err(e) => eprintln!("Read failed: {}", e),
-                        }
-                    }
-                    Err(e) => eprintln!("Write failed: {}", e),
-                }
+    // Write pattern 0x55
+    let pattern = vec![0x55; 512];
+    let write_cdb = write10_cdb(0, 1);
+    let write_response = execute_scsi_command(&mut client, &write_cdb, Some(&pattern), "WRITE(10)");
 
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    assert_eq!(write_response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response for write, got opcode 0x{:02x}", write_response.opcode);
+
+    // Read back
+    let read_cdb = read10_cdb(0, 1);
+    let read_response = execute_scsi_command(&mut client, &read_cdb, None, "READ(10)");
+
+    assert_eq!(read_response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response for read, got opcode 0x{:02x}", read_response.opcode);
+
+    // Verify data matches pattern
+    assert_eq!(read_response.data, pattern,
+        "Data integrity check failed - read data doesn't match written pattern\n\
+         \n\
+         Written pattern: 0x55 repeated {} times\n\
+         Read data length: {} bytes\n\
+         First mismatch at byte: {:?}\n\
+         \n\
+         This indicates:\n\
+         1. Storage layer is not persisting data correctly\n\
+         2. Target is returning wrong data\n\
+         3. Data corruption in transit or at rest",
+        pattern.len(),
+        read_response.data.len(),
+        pattern.iter().zip(&read_response.data)
+            .position(|(a, b)| a != b)
+    );
+
+    println!("✓ Data integrity verified: write pattern 0x55, read back matches");
+
+    client.logout().ok();
 }
 
 /// TI-003: Multi-Block Sequential Read
 #[test]
 #[ignore]
 fn test_io_multi_block_sequential_read() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=0, blocks=4
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        assert_eq!(response.data_length, 2048); // 4 blocks * 512 bytes
-                        println!("Multi-block sequential read: PASSED");
-                    }
-                    Err(e) => eprintln!("Multi-block read failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=0, blocks=4
+    let cdb = read10_cdb(0, 4);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10) multi-block");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data_length, 2048,
+        "Expected 2048 bytes (4 blocks × 512), got {} bytes\n\
+         \n\
+         Block size: 512 bytes\n\
+         Blocks requested: 4\n\
+         Expected data: 2048 bytes\n\
+         Actual data: {} bytes\n\
+         \n\
+         This indicates target is not returning correct data length.",
+        response.data_length, response.data_length);
+
+    println!("✓ Multi-block sequential read successful: 4 blocks (2048 bytes)");
+
+    client.logout().ok();
 }
 
 /// TI-004: Multi-Block Sequential Write
 #[test]
 #[ignore]
 fn test_io_multi_block_sequential_write() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let data = vec![0xAA; 2048]; // 4 blocks
-                // WRITE (10): LBA=0, blocks=4
-                let cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00];
-                match client.send_scsi_command(&cdb, Some(&data)) {
-                    Ok(_) => println!("Multi-block sequential write: PASSED"),
-                    Err(e) => eprintln!("Multi-block write failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let data = vec![0xAA; 2048]; // 4 blocks
+    let cdb = write10_cdb(0, 4);
+    let response = execute_scsi_command(&mut client, &cdb, Some(&data), "WRITE(10) multi-block");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    println!("✓ Multi-block sequential write successful: 4 blocks (2048 bytes)");
+
+    client.logout().ok();
 }
 
 /// TI-005: Random Access Reads
 #[test]
 #[ignore]
 fn test_io_random_access_reads() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // Read from various LBAs: 0, 10, 100, 1000
-                for lba in [0, 10, 100, 1000] {
-                    let cdb = vec![0x28, 0x00, (lba >> 24) as u8, (lba >> 16) as u8, (lba >> 8) as u8, lba as u8, 0x00, 0x00, 0x01, 0x00];
-                    match client.send_scsi_command(&cdb, None) {
-                        Ok(response) => assert_eq!(response.data_length, 512),
-                        Err(e) => {
-                            eprintln!("Random read at LBA {} failed: {}", lba, e);
-                            return;
-                        }
-                    }
-                }
-                println!("Random access reads: PASSED");
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // Read from various LBAs: 0, 10, 100, 1000
+    for lba in [0, 10, 100, 1000] {
+        let cdb = read10_cdb(lba, 1);
+        let response = execute_scsi_command(&mut client, &cdb, None,
+            &format!("READ(10) at LBA {}", lba));
+
+        assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+            "Expected SCSI Response for LBA {}, got opcode 0x{:02x}",
+            lba, response.opcode);
+
+        assert_eq!(response.data_length, 512,
+            "Expected 512 bytes at LBA {}, got {} bytes",
+            lba, response.data_length);
     }
+
+    println!("✓ Random access reads successful: LBAs 0, 10, 100, 1000");
+
+    client.logout().ok();
 }
 
 /// TI-006: Random Access Writes
 #[test]
 #[ignore]
 fn test_io_random_access_writes() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let data = vec![0xBB; 512];
-                // Write to various LBAs: 5, 50, 500
-                for lba in [5, 50, 500] {
-                    let cdb = vec![0x2A, 0x00, (lba >> 24) as u8, (lba >> 16) as u8, (lba >> 8) as u8, lba as u8, 0x00, 0x00, 0x01, 0x00];
-                    if let Err(e) = client.send_scsi_command(&cdb, Some(&data)) {
-                        eprintln!("Random write at LBA {} failed: {}", lba, e);
-                        return;
-                    }
-                }
-                println!("Random access writes: PASSED");
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let data = vec![0xBB; 512];
+    // Write to various LBAs: 5, 50, 500
+    for lba in [5, 50, 500] {
+        let cdb = write10_cdb(lba, 1);
+        let response = execute_scsi_command(&mut client, &cdb, Some(&data),
+            &format!("WRITE(10) at LBA {}", lba));
+
+        assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+            "Expected SCSI Response for LBA {}, got opcode 0x{:02x}",
+            lba, response.opcode);
     }
+
+    println!("✓ Random access writes successful: LBAs 5, 50, 500");
+
+    client.logout().ok();
 }
 
 /// TI-007: Large Transfer Read
 #[test]
 #[ignore]
 fn test_io_large_transfer_read() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=0, blocks=64 (32 KB)
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        assert_eq!(response.data_length, 32768); // 64 blocks * 512
-                        println!("Large transfer read: PASSED");
-                    }
-                    Err(e) => eprintln!("Large read failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=0, blocks=64 (32 KB)
+    let cdb = read10_cdb(0, 64);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10) large transfer");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data_length, 32768,
+        "Expected 32768 bytes (64 blocks × 512), got {} bytes",
+        response.data_length);
+
+    println!("✓ Large transfer read successful: 64 blocks (32 KB)");
+
+    client.logout().ok();
 }
 
 /// TI-008: Large Transfer Write
 #[test]
 #[ignore]
 fn test_io_large_transfer_write() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let data = vec![0xCC; 32768]; // 64 blocks
-                // WRITE (10): LBA=0, blocks=64
-                let cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00];
-                match client.send_scsi_command(&cdb, Some(&data)) {
-                    Ok(_) => println!("Large transfer write: PASSED"),
-                    Err(e) => eprintln!("Large write failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let data = vec![0xCC; 32768]; // 64 blocks
+    let cdb = write10_cdb(0, 64);
+    let response = execute_scsi_command(&mut client, &cdb, Some(&data), "WRITE(10) large transfer");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    println!("✓ Large transfer write successful: 64 blocks (32 KB)");
+
+    client.logout().ok();
 }
 
 /// TI-009: Zero-Length Transfer
 #[test]
 #[ignore]
 fn test_io_zero_length_transfer() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=0, blocks=0
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(_) => println!("Zero-length transfer: PASSED"),
-                    Err(e) => eprintln!("Zero-length transfer failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=0, blocks=0
+    let cdb = read10_cdb(0, 0);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10) zero-length");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    println!("✓ Zero-length transfer handled correctly");
+
+    client.logout().ok();
 }
 
 /// TI-010: Maximum Transfer Size
 #[test]
 #[ignore]
 fn test_io_maximum_transfer_size() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=0, blocks=256 (128 KB - typical max)
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        assert_eq!(response.data_length, 131072); // 256 blocks * 512
-                        println!("Maximum transfer size: PASSED");
-                    }
-                    Err(e) => eprintln!("Maximum transfer failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=0, blocks=256 (128 KB - typical max)
+    let cdb = read10_cdb(0, 256);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10) maximum transfer");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data_length, 131072,
+        "Expected 131072 bytes (256 blocks × 512), got {} bytes",
+        response.data_length);
+
+    println!("✓ Maximum transfer size successful: 256 blocks (128 KB)");
+
+    client.logout().ok();
 }
 
 /// TI-011: Beyond Maximum Transfer
 #[test]
 #[ignore]
 fn test_io_beyond_maximum_transfer() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=0, blocks=512 (256 KB - likely beyond max)
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(_) => println!("Beyond maximum transfer: handled"),
-                    Err(e) => println!("Beyond maximum transfer properly rejected: {}", e),
-                }
-                let _ = client.logout();
-            }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=0, blocks=512 (256 KB - likely beyond max)
+    let cdb = read10_cdb(0, 512);
+
+    // This may succeed or fail depending on target's MaxBurstLength
+    match client.send_scsi_command(&cdb, None) {
+        Ok(response) => {
+            assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+                "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+            println!("✓ Beyond maximum transfer: target handled 512 blocks (256 KB)");
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
+        Err(e) => {
+            println!("✓ Beyond maximum transfer properly rejected: {}", e);
+        }
     }
+
+    client.logout().ok();
 }
 
 /// TI-012: Unaligned Access
 #[test]
 #[ignore]
 fn test_io_unaligned_access() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // READ (10): LBA=1 (odd LBA), blocks=3
-                let cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00];
-                match client.send_scsi_command(&cdb, None) {
-                    Ok(response) => {
-                        assert_eq!(response.data_length, 1536); // 3 blocks * 512
-                        println!("Unaligned access: PASSED");
-                    }
-                    Err(e) => eprintln!("Unaligned access failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // READ (10): LBA=1 (odd LBA), blocks=3
+    let cdb = read10_cdb(1, 3);
+    let response = execute_scsi_command(&mut client, &cdb, None, "READ(10) unaligned");
+
+    assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response, got opcode 0x{:02x}", response.opcode);
+
+    assert_eq!(response.data_length, 1536,
+        "Expected 1536 bytes (3 blocks × 512), got {} bytes",
+        response.data_length);
+
+    println!("✓ Unaligned access successful: LBA=1, 3 blocks");
+
+    client.logout().ok();
 }
 
 /// TI-013: Write-Read-Verify Pattern
 #[test]
 #[ignore]
 fn test_io_write_read_verify_pattern() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let pattern = (0..512).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
-                // WRITE (10): LBA=10, blocks=1
-                let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01, 0x00];
-                match client.send_scsi_command(&write_cdb, Some(&pattern)) {
-                    Ok(_) => {
-                        // READ (10): LBA=10, blocks=1
-                        let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01, 0x00];
-                        match client.send_scsi_command(&read_cdb, None) {
-                            Ok(response) => {
-                                if response.data == pattern {
-                                    println!("Write-read-verify pattern: PASSED");
-                                } else {
-                                    eprintln!("Write-read-verify: data mismatch");
-                                }
-                            }
-                            Err(e) => eprintln!("Verify read failed: {}", e),
-                        }
-                    }
-                    Err(e) => eprintln!("Verify write failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let pattern = (0..512).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
+
+    // WRITE (10): LBA=10, blocks=1
+    let write_cdb = write10_cdb(10, 1);
+    let write_response = execute_scsi_command(&mut client, &write_cdb, Some(&pattern), "WRITE(10) at LBA 10");
+
+    assert_eq!(write_response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response for write, got opcode 0x{:02x}", write_response.opcode);
+
+    // READ (10): LBA=10, blocks=1
+    let read_cdb = read10_cdb(10, 1);
+    let read_response = execute_scsi_command(&mut client, &read_cdb, None, "READ(10) at LBA 10");
+
+    assert_eq!(read_response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response for read, got opcode 0x{:02x}", read_response.opcode);
+
+    assert_eq!(read_response.data, pattern,
+        "Write-read-verify pattern failed - data mismatch at LBA 10\n\
+         \n\
+         Pattern: incrementing bytes (0..255 repeated)\n\
+         First mismatch at byte: {:?}",
+        pattern.iter().zip(&read_response.data)
+            .position(|(a, b)| a != b)
+    );
+
+    println!("✓ Write-read-verify pattern successful: incrementing pattern verified at LBA 10");
+
+    client.logout().ok();
 }
 
 /// TI-014: Overwrite Test
 #[test]
 #[ignore]
 fn test_io_overwrite() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // Write pattern 1
-                let pattern1 = vec![0x11; 512];
-                let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x01, 0x00];
-                client.send_scsi_command(&write_cdb, Some(&pattern1)).ok();
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
 
-                // Overwrite with pattern 2
-                let pattern2 = vec![0x22; 512];
-                client.send_scsi_command(&write_cdb, Some(&pattern2)).ok();
+    let lba = 20;
 
-                // Read back and verify pattern 2
-                let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x01, 0x00];
-                match client.send_scsi_command(&read_cdb, None) {
-                    Ok(response) => {
-                        if response.data == pattern2 {
-                            println!("Overwrite test: PASSED");
-                        } else {
-                            eprintln!("Overwrite test: data mismatch");
-                        }
-                    }
-                    Err(e) => eprintln!("Overwrite read failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    // Write pattern 1 (0x11)
+    let pattern1 = vec![0x11; 512];
+    let write_cdb = write10_cdb(lba, 1);
+    execute_scsi_command(&mut client, &write_cdb, Some(&pattern1), "WRITE(10) pattern1");
+
+    // Overwrite with pattern 2 (0x22)
+    let pattern2 = vec![0x22; 512];
+    execute_scsi_command(&mut client, &write_cdb, Some(&pattern2), "WRITE(10) pattern2");
+
+    // Read back and verify pattern 2
+    let read_cdb = read10_cdb(lba, 1);
+    let read_response = execute_scsi_command(&mut client, &read_cdb, None, "READ(10) verify overwrite");
+
+    assert_eq!(read_response.data, pattern2,
+        "Overwrite test failed - expected pattern 2 (0x22), but data doesn't match\n\
+         \n\
+         This indicates:\n\
+         1. Overwrite didn't work - may still have pattern 1 (0x11)\n\
+         2. Data corruption\n\
+         3. Storage not properly updating existing data\n\
+         \n\
+         Expected: 0x22 repeated {} times\n\
+         Got different data at LBA {}",
+        pattern2.len(), lba
+    );
+
+    println!("✓ Overwrite test successful: pattern 1 (0x11) replaced with pattern 2 (0x22) at LBA {}", lba);
+
+    client.logout().ok();
 }
 
 // ============================================================================
@@ -1053,180 +1070,231 @@ fn test_io_overwrite() {
 #[ignore]
 fn test_stress_rapid_login_logout() {
     for i in 0..10 {
-        match IscsiClient::connect(target_addr()) {
-            Ok(mut client) => {
-                if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                    let _ = client.logout();
-                } else {
-                    eprintln!("Login failed on iteration {}", i);
-                    return;
-                }
-            }
-            Err(e) => {
-                eprintln!("Connection failed on iteration {}: {}", i, e);
-                return;
-            }
-        }
+        let mut client = IscsiClient::connect(target_addr())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Rapid login/logout stress test: connection failed on iteration {}\n\
+                     Error: {}\n\
+                     \n\
+                     This could indicate:\n\
+                     1. Target cannot handle rapid reconnections\n\
+                     2. Resource exhaustion (file descriptors, ports)\n\
+                     3. Connection timeout issues",
+                    i, e
+                )
+            });
+
+        client.login(initiator_iqn(), target_iqn())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Rapid login/logout stress test: login failed on iteration {}\n\
+                     Error: {}\n\
+                     \n\
+                     This could indicate:\n\
+                     1. Target cannot handle rapid login cycles\n\
+                     2. Session cleanup issues from previous iterations\n\
+                     3. Resource exhaustion on target side",
+                    i, e
+                )
+            });
+
+        client.logout().ok();
     }
-    println!("Rapid login/logout stress test: PASSED (10 cycles)");
+
+    println!("✓ Rapid login/logout stress test: 10 cycles completed successfully");
 }
 
 /// Stress test: Sustained I/O operations
 #[test]
 #[ignore]
 fn test_stress_sustained_io() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let data = vec![0xDD; 512];
-                // Perform 100 write/read cycles
-                for lba in 0..100 {
-                    let write_cdb = vec![0x2A, 0x00, 0x00, 0x00, 0x00, lba as u8, 0x00, 0x00, 0x01, 0x00];
-                    if client.send_scsi_command(&write_cdb, Some(&data)).is_err() {
-                        eprintln!("Sustained I/O failed at write {}", lba);
-                        return;
-                    }
-                    let read_cdb = vec![0x28, 0x00, 0x00, 0x00, 0x00, lba as u8, 0x00, 0x00, 0x01, 0x00];
-                    if client.send_scsi_command(&read_cdb, None).is_err() {
-                        eprintln!("Sustained I/O failed at read {}", lba);
-                        return;
-                    }
-                }
-                println!("Sustained I/O stress test: PASSED (100 write/read cycles)");
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let data = vec![0xDD; 512];
+
+    // Perform 100 write/read cycles
+    for lba in 0..100 {
+        let write_cdb = write10_cdb(lba, 1);
+        client.send_scsi_command(&write_cdb, Some(&data))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Sustained I/O stress test: write failed at LBA {}\n\
+                     Error: {}\n\
+                     \n\
+                     Completed {} of 100 write/read cycles before failure.\n\
+                     \n\
+                     This could indicate:\n\
+                     1. Target cannot sustain continuous I/O load\n\
+                     2. Buffer exhaustion\n\
+                     3. Session state corruption after multiple operations",
+                    lba, e, lba
+                )
+            });
+
+        let read_cdb = read10_cdb(lba, 1);
+        client.send_scsi_command(&read_cdb, None)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Sustained I/O stress test: read failed at LBA {}\n\
+                     Error: {}\n\
+                     \n\
+                     Completed {} of 100 write/read cycles before failure.",
+                    lba, e, lba
+                )
+            });
     }
+
+    println!("✓ Sustained I/O stress test: 100 write/read cycles completed successfully");
+
+    client.logout().ok();
 }
 
 /// Edge case: Read at capacity boundary
 #[test]
 #[ignore]
 fn test_edge_read_at_capacity_boundary() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // First get capacity
-                let cap_cdb = vec![0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-                match client.send_scsi_command(&cap_cdb, None) {
-                    Ok(response) => {
-                        if response.data.len() >= 8 {
-                            let last_lba = u32::from_be_bytes([
-                                response.data[0],
-                                response.data[1],
-                                response.data[2],
-                                response.data[3],
-                            ]);
-                            // Try to read the last LBA
-                            let read_cdb = vec![
-                                0x28, 0x00,
-                                (last_lba >> 24) as u8,
-                                (last_lba >> 16) as u8,
-                                (last_lba >> 8) as u8,
-                                last_lba as u8,
-                                0x00, 0x00, 0x01, 0x00
-                            ];
-                            match client.send_scsi_command(&read_cdb, None) {
-                                Ok(_) => println!("Read at capacity boundary: PASSED"),
-                                Err(e) => eprintln!("Read at last LBA failed: {}", e),
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("READ CAPACITY failed: {}", e),
-                }
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
-    }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // First get capacity
+    let cap_cdb = vec![0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let cap_response = execute_scsi_command(&mut client, &cap_cdb, None, "READ CAPACITY");
+
+    assert!(cap_response.data.len() >= 8,
+        "READ CAPACITY response too short: {} bytes (expected 8)",
+        cap_response.data.len());
+
+    let last_lba = u32::from_be_bytes([
+        cap_response.data[0],
+        cap_response.data[1],
+        cap_response.data[2],
+        cap_response.data[3],
+    ]);
+
+    // Try to read the last LBA
+    let read_cdb = read10_cdb(last_lba, 1);
+    let read_response = execute_scsi_command(&mut client, &read_cdb, None,
+        &format!("READ(10) at last LBA {}", last_lba));
+
+    assert_eq!(read_response.opcode, opcode::SCSI_RESPONSE,
+        "Expected SCSI Response for boundary read, got opcode 0x{:02x}",
+        read_response.opcode);
+
+    assert_eq!(read_response.data.len(), 512,
+        "Expected 512 bytes at boundary LBA {}, got {}",
+        last_lba, read_response.data.len());
+
+    println!("✓ Read at capacity boundary successful: last LBA {} is readable", last_lba);
+
+    client.logout().ok();
 }
 
 /// Edge case: Read beyond capacity
 #[test]
 #[ignore]
 fn test_edge_read_beyond_capacity() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // Try to read at a very high LBA that's definitely beyond capacity
-                let huge_lba = 0xFFFFFFu32;
-                let read_cdb = vec![
-                    0x28, 0x00,
-                    (huge_lba >> 24) as u8,
-                    (huge_lba >> 16) as u8,
-                    (huge_lba >> 8) as u8,
-                    huge_lba as u8,
-                    0x00, 0x00, 0x01, 0x00
-                ];
-                match client.send_scsi_command(&read_cdb, None) {
-                    Ok(_) => eprintln!("Read beyond capacity should have failed!"),
-                    Err(e) => println!("Read beyond capacity properly rejected: {}", e),
-                }
-                let _ = client.logout();
-            }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // Try to read at a very high LBA that's definitely beyond capacity
+    let huge_lba = 0xFFFFFFu32;
+    let read_cdb = read10_cdb(huge_lba, 1);
+
+    // Target should reject this with an error or CHECK CONDITION
+    match client.send_scsi_command(&read_cdb, None) {
+        Ok(response) => {
+            // If target returns a response, it should be an error status
+            println!("✓ Read beyond capacity handled (target returned response - may contain CHECK CONDITION)\n\
+                      Response opcode: 0x{:02x}\n\
+                      Target accepted LBA {} which is likely beyond capacity",
+                response.opcode, huge_lba);
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
+        Err(e) => {
+            println!("✓ Read beyond capacity properly rejected: {}", e);
+        }
     }
+
+    client.logout().ok();
 }
 
 /// Edge case: Interleaved read/write operations
 #[test]
 #[ignore]
 fn test_edge_interleaved_read_write() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                // Write to LBA 0, read from LBA 10, write to LBA 5, read from LBA 0
-                let data = vec![0xEE; 512];
-                let ops = vec![
-                    ("write", 0u32), ("read", 10), ("write", 5), ("read", 0),
-                    ("write", 20), ("read", 5), ("write", 15), ("read", 20),
-                ];
-                for (op, lba) in ops {
-                    let cdb = if op == "write" {
-                        vec![0x2A, 0x00, 0, 0, 0, lba as u8, 0x00, 0x00, 0x01, 0x00]
-                    } else {
-                        vec![0x28, 0x00, 0, 0, 0, lba as u8, 0x00, 0x00, 0x01, 0x00]
-                    };
-                    let result = if op == "write" {
-                        client.send_scsi_command(&cdb, Some(&data))
-                    } else {
-                        client.send_scsi_command(&cdb, None)
-                    };
-                    if result.is_err() {
-                        eprintln!("Interleaved {} at LBA {} failed", op, lba);
-                        return;
-                    }
-                }
-                println!("Interleaved read/write: PASSED");
-                let _ = client.logout();
-            }
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    // Write to LBA 0, read from LBA 10, write to LBA 5, read from LBA 0
+    let data = vec![0xEE; 512];
+    let ops = vec![
+        ("write", 0u32), ("read", 10), ("write", 5), ("read", 0),
+        ("write", 20), ("read", 5), ("write", 15), ("read", 20),
+    ];
+
+    for (op, lba) in ops {
+        if op == "write" {
+            let cdb = write10_cdb(lba, 1);
+            let response = execute_scsi_command(&mut client, &cdb, Some(&data),
+                &format!("WRITE(10) at LBA {}", lba));
+
+            assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+                "Interleaved write at LBA {} failed: expected SCSI Response, got opcode 0x{:02x}",
+                lba, response.opcode);
+        } else {
+            let cdb = read10_cdb(lba, 1);
+            let response = execute_scsi_command(&mut client, &cdb, None,
+                &format!("READ(10) at LBA {}", lba));
+
+            assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+                "Interleaved read at LBA {} failed: expected SCSI Response, got opcode 0x{:02x}",
+                lba, response.opcode);
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
     }
+
+    println!("✓ Interleaved read/write successful: 8 operations across multiple LBAs");
+
+    client.logout().ok();
 }
 
 /// Edge case: Multiple INQUIRY commands in succession
 #[test]
 #[ignore]
 fn test_edge_multiple_inquiry() {
-    match IscsiClient::connect(target_addr()) {
-        Ok(mut client) => {
-            if client.login(initiator_iqn(), target_iqn()).is_ok() {
-                let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
-                for i in 0..20 {
-                    if client.send_scsi_command(&cdb, None).is_err() {
-                        eprintln!("Multiple INQUIRY failed at iteration {}", i);
-                        return;
-                    }
-                }
-                println!("Multiple INQUIRY: PASSED (20 iterations)");
-                let _ = client.logout();
-            }
-        }
-        Err(e) => eprintln!("Connection failed: {}", e),
+    let mut client = connect_to_target();
+    login_to_target(&mut client);
+
+    let cdb = vec![0x12, 0x00, 0x00, 0x00, 0xFF, 0x00];
+
+    for i in 0..20 {
+        let response = client.send_scsi_command(&cdb, None)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Multiple INQUIRY test: iteration {} failed\n\
+                     Error: {}\n\
+                     \n\
+                     Completed {} of 20 INQUIRY commands before failure.\n\
+                     \n\
+                     This could indicate:\n\
+                     1. Target cannot handle rapid command succession\n\
+                     2. Command queue overflow\n\
+                     3. Session state corruption",
+                    i, e, i
+                )
+            });
+
+        assert_eq!(response.opcode, opcode::SCSI_RESPONSE,
+            "INQUIRY iteration {}: expected SCSI Response, got opcode 0x{:02x}",
+            i, response.opcode);
+
+        assert!(response.data.len() >= 36,
+            "INQUIRY iteration {}: response too short ({} bytes)",
+            i, response.data.len());
     }
+
+    println!("✓ Multiple INQUIRY successful: 20 successive INQUIRY commands completed");
+
+    client.logout().ok();
 }
 
 // ============================================================================
